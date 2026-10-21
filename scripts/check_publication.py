@@ -36,6 +36,8 @@ def scan(text):
         # Aspas simples/backticks envolvendo um literal não pertencem ao endereço.
         if address[0] in ("'", '`') and text[match.end():match.end() + 1] == address[0]:
             address = address[1:]
+            if address.startswith('@'):
+                return match.group()  # literal de sufixo, sem parte local
         if address in ALLOWED_EMAILS:
             count += 1
             return '[EMAIL_AUTORIZADO]'

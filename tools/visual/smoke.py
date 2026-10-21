@@ -52,13 +52,13 @@ async def main(a):
         await pg.evaluate("document.getElementById('fps').style.visibility='hidden'")
         print('stats:', await pg.inner_text('#stats'))
         shot1 = os.path.join(a.out, 'visao-geral.png')
-        await pg.screenshot(path=shot1)
+        await pg.screenshot(path=shot1, timeout=120000)
         node = a.node or await pg.evaluate("document.querySelector('.label') && document.querySelector('.label').textContent")
         if node:
             ok = await pg.evaluate('(n) => CerebroSemantico.select(n)', node)
             await pg.wait_for_timeout(a.wait * 1000)
             shot2 = os.path.join(a.out, 'ativo.png')
-            await pg.screenshot(path=shot2)
+            await pg.screenshot(path=shot2, timeout=120000)
             print('ativo:', node, '| select', ok)
         await b.close()
     box = [int(a.width * 0.26), int(a.height * 0.22), int(a.width * 0.79), int(a.height * 0.78)]

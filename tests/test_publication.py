@@ -43,6 +43,11 @@ class PublicationTest(unittest.TestCase):
         text = 'noreply' + '@github.com senha: ' + 'abcdefgh12'
         self.assertIn('credencial', scan(text)['blocking_findings'])
 
+    def test_sufixo_de_jid_sem_parte_local_nao_e_email(self):
+        result = scan("endswith('" + '@g.us' + "')")
+        self.assertEqual(result['allowed_email_occurrences'], 0)
+        self.assertEqual(result['blocking_findings'], [])
+
     def test_cli_falha_sem_imprimir_valor(self):
         sentinel = 'pessoa' + '@secreto.test'
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt') as f:
