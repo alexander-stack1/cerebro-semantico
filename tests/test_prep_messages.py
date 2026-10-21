@@ -90,6 +90,28 @@ class PrepTest(unittest.TestCase):
         self.assertEqual(len(body), 151)   # 150 dos outros + 1 do dono
         self.assertTrue(any(' EU: minha' in x for x in body))
 
+    def test_jid_nunca_aparece_no_extrato(self):
+        num_a, num_b = '5521' + '998765432', '5521' + '987654321'
+        files, _, _ = self.run_prep([
+            msg(num_a + '@s.whatsapp.net', None, 'oi', sender=None, sender_jid=num_a + '@s.whatsapp.net'),
+            msg(num_b + '@s.whatsapp.net', None, 'tudo bem', sender=None, sender_jid=num_b + '@s.whatsapp.net'),
+        ])
+        txt = files['N9_outros']
+        self.assertNotIn('98765432', txt)
+        self.assertNotIn('87654321', txt)
+        self.assertNotIn('@s.whatsapp', txt)
+        self.assertIn('?: oi', txt)
+        self.assertEqual(txt.count('===== CONVERSA: [sem nome]'), 2)   # conversas sem nome não se fundem
+
+    def test_nome_de_remetente_e_de_conversa_passam_por_redacao(self):
+        files, _, _ = self.run_prep([
+            msg('equipe@g.us', 'Equipe', 'bom dia', sender='+55 ' + CEL),
+            msg('loja@s', 'Loja ' + CEL, 'pedido saiu'),
+        ])
+        self.assertNotIn('5432', files['N1_trabalho'] + files['N9_outros'])
+        self.assertIn('[TEL]: bom dia', files['N1_trabalho'])
+        self.assertIn('CONVERSA: Loja [TEL]', files['N9_outros'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -13,6 +13,8 @@ Efeitos:
   - Conversa de subcategoria sigilosa, ou conversa 1:1 desconhecida cujo nome casa com
     messages.sensitive_name_regex, ganha alias novo (prefixo messages.new_alias_prefix) gravado em aliases.
   - O texto passa por redact() e é cortado em messages.max_chars.
+  - JID nunca sai no extrato: remetente sem nome vira '?' e conversa sem nome vira '[sem nome]'.
+    Nomes de remetente e de conversa também passam por redact() (contato salvo como número).
   - Grupos com mais de group_sample.threshold mensagens viram amostra: todas as do dono mais
     keep_others das demais com min_len caracteres ou mais (semente fixa, resultado reprodutível).
 """
@@ -30,6 +32,7 @@ import config as cfgmod  # noqa: E402
 from redact import redact  # noqa: E402
 
 PLACEHOLDER = re.compile(r'(?i)sent (image|sticker|document|video|audio|gif|location)')
+NO_SENDER, NO_CHAT = '?', '[sem nome]'
 
 
 def segment_of(dom, sub, disp, mc, sens):
@@ -114,9 +117,11 @@ class Prep:
             elif self.sens.match(disp):
                 who = mc['sensitive_label']
             else:
-                who = (r.get('sender_name') or (r.get('sender_jid') or '?').split('@')[0])[:18]
+                who = redact(r.get('sender_name') or NO_SENDER)[:18]
             ts = (dt.datetime.strptime(r['timestamp'][:19], '%Y-%m-%dT%H:%M:%S') + self.tz).strftime('%m-%d %H:%M')
-            key = (disp, d, s, r['chat_jid'].endswith('@g.us'))
+            shown = disp if al or r['chat_jid'] in self.keys else redact(r.get('chat_name') or NO_CHAT)
+            # conversas sem nome se separam pelo JID na chave, que nunca é escrito
+            key = (shown, d, s, r['chat_jid'].endswith('@g.us'), r['chat_jid'] if shown == NO_CHAT else None)
             out[segment_of(d, s, disp, mc, self.sens)][key].append(f'{ts} {who}: {t}')
         return out, n_in
 
@@ -131,7 +136,7 @@ class Prep:
         report = []
         for sg, chats in out.items():
             lines = []
-            for (disp, d, s, g), ls in sorted(chats.items(), key=lambda kv: kv[1][0]):
+            for (disp, d, s, g, _jid), ls in sorted(chats.items(), key=lambda kv: kv[1][0]):
                 if g and len(ls) > gs['threshold']:
                     random.seed(gs['seed'])
                     mine = [x for x in ls if me in x]
