@@ -52,7 +52,9 @@ def validate_metadata(receipt):
             or observations.get('selected') != 'Reforma do banheiro'
             or not observations.get('first_week') or not observations.get('middle_week')
             or observations['first_week'] == observations['middle_week']
-            or not observations.get('stats')):
+            or not observations.get('stats')
+            or observations.get('navigation_end') != 'overview'
+            or not observations.get('timeline_end', '').startswith('Esta semana')):
         raise ValueError('Metadados de captura incompletos')
 
 
@@ -137,13 +139,26 @@ async def capture(folder):
                 await page.locator('#tlBars button').last.click()
                 await page.wait_for_timeout(5000)
             observations['stats'] = await page.locator('#stats').inner_text()
-            end = await page.evaluate('performance.now() / 1000')
+            # Confirma o estado final e força sua composição antes de fechar a gravação.
+            # O relógio da página não delimita o fim do arquivo de vídeo: o screencast
+            # pode atrasar em SwiftShader. Preserve toda a cauda gravada.
+            if scene == 'navegacao':
+                if await page.locator('#panel').evaluate("el => el.classList.contains('open')"):
+                    raise ValueError('Retorno à visão geral não ocorreu')
+                observations['navigation_end'] = 'overview'
+            else:
+                values = await page.locator('#tlRange').evaluate('el => [el.value, el.max]')
+                if values[0] != values[1]:
+                    raise ValueError('Última semana não foi selecionada')
+                observations['timeline_end'] = await page.locator('#tlLabel').inner_text()
+            await page.screenshot(timeout=120000)
+            await page.wait_for_timeout(5000)
             video = page.video
             await context.close()
             video_path = await video.path()
             # H.264, yuv420p e faststart para players de navegador. Sem áudio e sem acelerar.
             subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
-                '-ss', str(start), '-i', video_path, '-t', str(end - start),
+                '-ss', str(start), '-i', video_path,
                 '-an', '-c:v', 'libx264', '-crf', '23', '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart', str(ROOT / 'docs/media' / (scene + '.mp4'))], check=True)
         await browser.close()
