@@ -60,7 +60,7 @@ Leia [docs/PRIVACIDADE.md](docs/PRIVACIDADE.md) antes de usar com dados reais.
 ## Desenvolvimento
 
 ```bash
-python3 -m unittest discover -s tests        # 35 testes, só biblioteca padrão
+python3 -m unittest discover -s tests        # 39 testes, só biblioteca padrão
 python3 scripts/check_size.py                # limite de 20.000 bytes por arquivo de texto
 python3 examples/gerar_vault_exemplo.py      # regenera o vault de exemplo
 python3 tools/visual/smoke.py --html prototype/cerebro-semantico-3d.html   # opcional, precisa de playwright

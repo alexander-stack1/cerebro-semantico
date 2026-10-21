@@ -16,7 +16,7 @@ Memória de chat não autoriza caminho nem fato. Cite o arquivo.
 
 - Pipeline: Python 3.9+, só biblioteca padrão. Sem `requirements.txt` de propósito (ADR-001).
 - Viewer: HTML de arquivo único, Three.js r160 e GSAP 3.12.5 via importmap do jsDelivr, GLSL próprio.
-- Testes: `python3 -m unittest discover -s tests` (35 testes).
+- Testes: `python3 -m unittest discover -s tests` (39 testes).
 - Tamanho: `python3 scripts/check_size.py` (20.000 bytes por arquivo de texto).
 - Visual (opcional, precisa de playwright, pillow e numpy): `python3 tools/visual/smoke.py --html prototype/cerebro-semantico-3d.html`.
 - Rodar local: abrir `prototype/cerebro-semantico-3d.html` no navegador.

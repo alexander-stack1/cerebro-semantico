@@ -105,3 +105,12 @@ ADRs curtos. Só o que muda o próximo diff.
 - **Decisão:** MIT, por escolha do mantenedor.
 - **Consequência:** Qualquer um pode reutilizar o código, inclusive em produto fechado, desde que mantenha o aviso de copyright. Trocar de licença depois de público exige novo ADR.
 - **Paths:** `LICENSE`, `README.md` (seção Licença)
+
+### ADR-013: JID fora dos extratos de mensagens
+
+- **Data:** 2026-10-21
+- **Status:** accepted
+- **Contexto:** `prep_messages.py` só redigia o texto. Remetente sem nome saía como o número do JID, conversa sem nome saía como o próprio JID no cabeçalho, e o nome do remetente era cortado em 18 caracteres antes de qualquer redação.
+- **Decisão:** Remetente sem nome vira `?` e conversa sem nome vira `[sem nome]`. Nome igual a um JID conta como sem nome. Nome de remetente e de conversa passam por `redact()` antes do corte. Quando o nome falta ou a redação o alterou, o JID separa as conversas só na chave interna, para duas conversas `[TEL]` não se fundirem. Nas conversas não sigilosas os nomes continuam, por decisão do mantenedor.
+- **Consequência:** Com nomes que a redação não altera, a saída não muda. Testes em `tests/test_prep_messages.py` falham se um JID ou telefone voltar a aparecer. Número estrangeiro ou sem DDD usado como nome passa inteiro, como já passa no texto (limite de `redact()` declarado em `docs/PRIVACIDADE.md`).
+- **Paths:** `pipeline/prep_messages.py`, `tests/test_prep_messages.py`
