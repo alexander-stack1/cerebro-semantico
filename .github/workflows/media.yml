@@ -1,0 +1,33 @@
+name: demonstrações
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependências de captura
+        run: |
+          python -m pip install playwright==1.64.0
+          python -m playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Gravar somente o exemplo fictício
+        env:
+          PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python tools/visual/demo_media.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-${{ github.sha }}
+          path: docs/media/
+          if-no-files-found: error
