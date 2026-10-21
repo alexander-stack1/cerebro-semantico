@@ -48,6 +48,11 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(result['allowed_email_occurrences'], 0)
         self.assertEqual(result['blocking_findings'], [])
 
+    def test_ponto_final_nao_oculta_email(self):
+        self.assertIn('email', scan('outra-conta' + '@users.NOREPLY.GITHUB.COM.')['blocking_findings'])
+        self.assertEqual(scan('noreply' + '@github.com.')['blocking_findings'], [])
+        self.assertIn('email', scan('noreply' + '@github.com.evil.test.')['blocking_findings'])
+
     def test_cli_falha_sem_imprimir_valor(self):
         sentinel = 'pessoa' + '@secreto.test'
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt') as f:

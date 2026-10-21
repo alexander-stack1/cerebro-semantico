@@ -17,7 +17,7 @@ ALLOWED_EMAILS = frozenset({
 # Inclui pontuação válida na parte local e endereços com parte local entre aspas.
 EMAIL = re.compile(
     r"""(?<![\w.!#$%&'*+/=?^`{|}~-])(?:[\w.!#$%&'*+/=?^`{|}~-]+|"(?:[^"\\]|\\.)+")"""
-    r"""@(?:[\w-]+\.)+[A-Za-z]{2,}(?![\w.-])"""
+    r"""@(?:[\w-]+\.)+[A-Za-z][\w.-]*"""
 )
 
 
@@ -38,6 +38,7 @@ def scan(text):
             address = address[1:]
             if address.startswith('@'):
                 return match.group()  # literal de sufixo, sem parte local
+        address = address.rstrip('.')  # pontuação terminal, nunca sufixo de domínio
         if address in ALLOWED_EMAILS:
             count += 1
             return '[EMAIL_AUTORIZADO]'

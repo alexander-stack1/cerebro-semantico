@@ -2,7 +2,9 @@
 
 Transforma um vault de notas Markdown (formato Obsidian) num cérebro 3D navegável. Cada nota de tema vira um neurônio no lobo da sua área. Cada link vira uma sinapse. Uma linha do tempo semanal mostra quais assuntos esquentaram e quais esfriaram.
 
-![Visão geral do cérebro com o vault de exemplo](docs/img/preview.jpg)
+![Visão geral do cérebro com o vault de exemplo](docs/img/preview.png)
+
+Origem da captura: [fontes e hashes](docs/img/preview-origin.json). Verificação: `python3 tools/visual/preview.py --check --verify-ci`.
 
 *English summary at the end.*
 
@@ -60,7 +62,7 @@ Leia [docs/PRIVACIDADE.md](docs/PRIVACIDADE.md) antes de usar com dados reais.
 ## Desenvolvimento
 
 ```bash
-python3 -m unittest discover -s tests        # 39 testes, só biblioteca padrão
+python3 -m unittest discover -s tests        # 53 testes, só biblioteca padrão
 python3 scripts/check_size.py                # limite de 20.000 bytes por arquivo de texto
 python3 examples/gerar_vault_exemplo.py      # regenera o vault de exemplo
 python3 tools/visual/smoke.py --html prototype/cerebro-semantico-3d.html   # opcional, precisa de playwright
