@@ -22,7 +22,7 @@ Etapas da sessão de origem:
 | Testes (`tests/`) | 35 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
 | Exemplo (`examples/`) | Vault fictício de 59 arquivos, 40 temas em 8 categorias, 14 semanas. Grafo de 74 sinapses diretas e 5 latentes. |
 | Viewer (`prototype/`) | Funciona. Arquivo único de 127 KB, acima do limite de 20 KB (exceção em `.agent-size-ignore`). |
-| CI (`docs/ci-workflow.yml`) | Testes em Python 3.9 e 3.12 e limite de tamanho. Pronto, mas fora do lugar: a ferramenta que gravou o repo não escreve em `.github/workflows/`. A fase 1 da publicação move o arquivo. Ainda não rodou: o repo não tem remoto. |
+| CI (`.github/workflows/ci.yml`) | Testes em Python 3.9 e 3.12 e limite de tamanho, no runner `ubuntu-24.04` (a imagem 26.04 não tem 3.9). Movido na fase 1, em 2026-10-21. |
 
 ## Como foi verificado
 
@@ -51,7 +51,7 @@ Peça ao Claude Code: "Faça a fase 1 da publicação do docs/HANDOFF.md."
 
 1. Confirmar a conta: `gh api user -q .login` precisa responder `alexander-stack1`. Se responder outra conta, pare e pergunte.
 2. E-mail dos commits: o e-mail global do git do mantenedor é pessoal e ficaria público no histórico. Configure só neste repo o e-mail noreply do GitHub, antes do primeiro commit: `git config user.email "$(gh api user -q .id)+$(gh api user -q .login)@users.noreply.github.com"`. Confira com `git config user.email`.
-3. Mover o CI para o lugar: `mkdir -p .github/workflows && mv docs/ci-workflow.yml .github/workflows/ci.yml && git add -A`.
+3. Mover o CI para o lugar: `mkdir -p .github/workflows && mv docs/ci-workflow.yml .github/workflows/ci.yml && git add -A`. Feito em 2026-10-21.
 4. Conferir que nada privado está no stage:
    - `git status --short --ignored` mostra `CLAUDE.local.md` como ignorado (`!!`);
    - `git ls-files | grep -iE 'ndjson|chat_map|aliases|chaves|config\.json$|\.zip$'` não imprime nada.
@@ -106,4 +106,4 @@ Se qualquer item falhar, o repositório continua privado. Dado sensível achado 
 2. Rodar `python3 -m unittest discover -s tests` e `python3 scripts/check_size.py`.
 3. Abrir `prototype/cerebro-semantico-3d.html` no navegador.
 4. Fazer a fase 1 da publicação (seção acima). Confirmar com o mantenedor, antes do roadmap, a opção (a) ou (b) do item 1.
-5. Depois do primeiro commit, preencher `git_sha` em `docs/agent/REPO_MAP.md`.
+5. Depois do primeiro commit, preencher `git_sha` em `docs/agent/REPO_MAP.md`. Feito: `f6b5054`.
