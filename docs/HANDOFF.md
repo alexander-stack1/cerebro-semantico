@@ -75,7 +75,7 @@ Peça ao Claude Code: "Faça o checklist da fase 2 do docs/HANDOFF.md e me mostr
    Resultado esperado: `[]`.
 3. Varredura de nomes sigilosos do mantenedor no mesmo histórico. O comando está no `CLAUDE.local.md`. Imprime só a contagem, nunca os nomes. Resultado esperado: `0`.
 4. Nenhum caminho da máquina do mantenedor no histórico: `grep -cE '/U[s]ers/|analise-w[h]atsapp' /tmp/historico.txt` responde `0`.
-5. Só e-mail noreply como autor e committer: `git log --all --format='%ae%n%ce' | sort -u` lista apenas endereços `users.noreply.github.com`.
+5. E-mails de autor e committer conhecidos: `git log --all --format='%ae%n%ce' | sort -u` lista só o noreply da conta (`users.noreply.github.com`), `noreply@github.com` (committer dos merges feitos pelo GitHub) e o e-mail pessoal do mantenedor, que o squash merge grava como autor. O mantenedor aceitou esse e-mail em 2026-10-21 porque ele já é público. Qualquer outro endereço bloqueia a abertura.
 6. `examples/` só com conteúdo fictício e `docs/img/preview.jpg` gerado do vault de exemplo.
 7. CI verde no último commit.
 8. Apagar `/tmp/historico.txt`.
