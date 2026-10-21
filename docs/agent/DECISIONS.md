@@ -114,3 +114,12 @@ ADRs curtos. Só o que muda o próximo diff.
 - **Decisão:** Remetente sem nome vira `?` e conversa sem nome vira `[sem nome]`. Nome igual a um JID conta como sem nome. Nome de remetente e de conversa passam por `redact()` antes do corte. Quando o nome falta ou a redação o alterou, o JID separa as conversas só na chave interna, para duas conversas `[TEL]` não se fundirem. Nas conversas não sigilosas os nomes continuam, por decisão do mantenedor.
 - **Consequência:** Com nomes que a redação não altera, a saída não muda. Testes em `tests/test_prep_messages.py` falham se um JID ou telefone voltar a aparecer. Número estrangeiro ou sem DDD usado como nome passa inteiro, como já passa no texto (limite de `redact()` declarado em `docs/PRIVACIDADE.md`).
 - **Paths:** `pipeline/prep_messages.py`, `tests/test_prep_messages.py`
+
+### ADR-014: Evidência de publicação e origem do preview
+
+- **Data:** 2026-10-21
+- **Status:** accepted
+- **Contexto:** O detector de histórico acusava os noreply aceitos; a captura anterior não tinha registro reproduzível da origem.
+- **Decisão:** Preservar achados brutos e liberar no conteúdo somente os dois endereços noreply completos conhecidos. O e-mail pessoal aceito como autor não é liberado no conteúdo. Capturar o exemplo pelo smoke, em PNG, com hashes das fontes e da imagem, revisão de origem e identificador do run quando gerado no CI.
+- **Consequência:** Outros endereços continuam bloqueando. Mudança na imagem ou nas fontes invalida a verificação de origem até regenerar. O procedimento é reproduzível, mas os pixels da animação podem variar. A publicação continua dependendo do ok do mantenedor após o checklist.
+- **Paths:** `scripts/check_publication.py`, `tools/visual/preview.py`, `docs/img/preview-origin.json`, `docs/HANDOFF.md`

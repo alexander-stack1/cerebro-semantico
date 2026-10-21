@@ -1,0 +1,27 @@
+{
+  "command": "python3 tools/visual/preview.py",
+  "revision": "4f4bdc964f8a998b6bd196e622735c5fa6fccffb",
+  "head_revision": "8bbd760f19ffbedb75f7202f186d327508c1f5c8",
+  "ci_run": "39647747061",
+  "capture": "Chromium / SwiftShader; smoke; viewport 1440x900; wait 14s; overview",
+  "dependencies": {
+    "playwright": "1.64.0",
+    "pillow": "13.0.0",
+    "numpy": "2.5.4"
+  },
+  "sha256": {
+    "examples/gerar_vault_exemplo.py": "29852a91bb3bcdb982869e7dcfaaee1868740788d6b81fed396e5f3634e4f07a",
+    "examples/sample_graph.json": "f9006ab3539582822a1e8d7a4435fe528fceecb7392a14ead297c119614a39d4",
+    "config/config.example.json": "599f1aba058b1250a4eeec1bb4f1122feea978c69d409bb93204b1bcf8a40404",
+    "pipeline/build_graph.py": "d5d642bfac48a7b412028047f39fb97d7306142063aa5050e65466d2db8538ae",
+    "pipeline/vault.py": "adaaa6fb0c95c22644f84ab242ee95fe4fccb91649f69bf9f7cf5b2bd1a8eebb",
+    "pipeline/config.py": "4307a309263fac639ab805baa1c50ad559da28cabb2443c6d4bf47e290ce8276",
+    "pipeline/embed_viewer.py": "e451360b157a92c7a653db5b8b74422ae13790a4e8506cea2f7f377db6ca2baa",
+    "prototype/cerebro-semantico-3d.html": "b76574f95b6b0914aa2068839b1956830d6470e51e2d46e3bb51f46454db9bb3",
+    "tools/visual/smoke.py": "00f814c3f705ca17843e4ef2b622c7a39a87e6a9f8042f0b1bccbe61894813da",
+    "tools/visual/measure.py": "c915123c04df707775929968c199d75ae6a051d3a8d454b290c232b41be17ee3",
+    "tools/visual/preview.py": "d71f1d8e1f381b28740bdb9c9bba206676f78a6267bb5991421cc8f92e983aeb",
+    ".github/workflows/ci.yml": "40f04b4786a9629d4052b6c7f16b00dfe5eee7fcab52526243f53e933f3214cb",
+    "docs/img/preview.png": "e18146235fd02e15c94d24577192d4e37c4f2ba381d4e81646800e091b2f83c1"
+  }
+}

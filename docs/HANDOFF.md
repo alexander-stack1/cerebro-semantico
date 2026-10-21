@@ -19,7 +19,7 @@ Etapas da sessão de origem:
 | Parte | Estado |
 |---|---|
 | Pipeline (`pipeline/`) | Completo para o fluxo atual. Saída idêntica ao pipeline de origem (ADR-010). |
-| Testes (`tests/`) | 39 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
+| Testes (`tests/`) | 53 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
 | Exemplo (`examples/`) | Vault fictício de 59 arquivos, 40 temas em 8 categorias, 14 semanas. Grafo de 74 sinapses diretas e 5 latentes. |
 | Viewer (`prototype/`) | Funciona. Arquivo único de 127 KB, acima do limite de 20 KB (exceção em `.agent-size-ignore`). |
 | CI (`.github/workflows/ci.yml`) | Testes em Python 3.9 e 3.12 e limite de tamanho, no runner `ubuntu-24.04` (a imagem 26.04 não tem 3.9). Movido na fase 1, em 2026-10-21. |
@@ -67,18 +67,20 @@ Peça ao Claude Code: "Faça a fase 1 da publicação do docs/HANDOFF.md."
 Peça ao Claude Code: "Faça o checklist da fase 2 do docs/HANDOFF.md e me mostre o resultado. Não mude a visibilidade." Cada item precisa de evidência (comando e saída), não de impressão.
 
 1. Licença decidida: MIT, por decisão do mantenedor em 2026-10-21 (ADR-012). Conferir que `LICENSE` começa com `MIT License`.
-2. Varredura do histórico inteiro, não só do HEAD. Os testes ficam de fora porque usam valores sintéticos de propósito:
+2. Varredura do histórico inteiro, não só do HEAD. Preserve o resultado bruto e discrimine somente os dois endereços noreply completos autorizados em `scripts/check_publication.py`:
    ```bash
-   git log -p --all --format='%H%n%B' -- . ':!tests' > /tmp/historico.txt
-   python3 -c "import sys; sys.path.insert(0, 'pipeline'); from redact import detect; print(detect(open('/tmp/historico.txt').read()))"
+   export HISTORICO_PUBLICACAO="$(mktemp -t cerebro-historico.XXXXXX)"
+   git log -p --all --format='%H%n%B' -- . ':!tests' > "$HISTORICO_PUBLICACAO" &&
+   python3 scripts/check_publication.py "$HISTORICO_PUBLICACAO"
    ```
-   Resultado esperado: `[]`.
-3. Varredura de nomes sigilosos do mantenedor no mesmo histórico. O comando está no `CLAUDE.local.md`. Imprime só a contagem, nunca os nomes. Resultado esperado: `0`.
-4. Nenhum caminho da máquina do mantenedor no histórico: `grep -cE '/U[s]ers/|analise-w[h]atsapp' /tmp/historico.txt` responde `0`.
+   Resultado esperado: `blocking_findings: []` e saída 0. `raw_findings` pode conter `email`; `allowed_email_occurrences` conta as ocorrências exatas autorizadas. Outros endereços, inclusive de outras contas noreply, bloqueiam. O e-mail pessoal aceito como autor não ganha exceção no conteúdo. Não excluir por domínio genérico.
+   Inspecione separadamente todas as versões históricas de `tests/`, classificando valores sintéticos por arquivo e versão. Confira também os blobs completos de cada commit, pois diffs de merge podem omitir conteúdo.
+3. Varredura de nomes sigilosos do mantenedor no mesmo histórico. O comando está no `CLAUDE.local.md` e lê `HISTORICO_PUBLICACAO`. Incluir todos os nomes completos, sem excluir os curtos. Imprime só a contagem, nunca os nomes. Resultado esperado: `0`.
+4. Nenhum caminho da máquina do mantenedor no histórico: `grep -cE '/U[s]ers/|analise-w[h]atsapp' "$HISTORICO_PUBLICACAO"` responde `0`.
 5. E-mails de autor e committer conhecidos: `git log --all --format='%ae%n%ce' | sort -u` lista só o noreply da conta (`users.noreply.github.com`), `noreply@github.com` (committer dos merges feitos pelo GitHub) e o e-mail pessoal do mantenedor, que o squash merge grava como autor. O mantenedor aceitou esse e-mail em 2026-10-21 porque ele já é público. Qualquer outro endereço bloqueia a abertura.
-6. `examples/` só com conteúdo fictício e `docs/img/preview.jpg` gerado do vault de exemplo.
+6. `examples/` só com conteúdo fictício. Rodar `python3 tools/visual/preview.py --check --verify-ci`: confere o run concluído e o artefato do GitHub byte a byte, além dos hashes de `docs/img/preview.png`, do grafo e das fontes registradas em `docs/img/preview-origin.json`. Para regenerar, `python3 tools/visual/preview.py` verifica a reprodução do vault/grafo, captura o HTML de exemplo em Chromium e grava o PNG sem conversão. Requer as dependências opcionais do smoke. O job `preview` do CI também gera a captura e oferece o artefato para download. Inspecione a imagem. A animação varia entre execuções; reproduz-se o procedimento, sem prometer pixels idênticos.
 7. CI verde no último commit.
-8. Apagar `/tmp/historico.txt`.
+8. Remover apenas o temporário criado nesta execução: `rm -f -- "$HISTORICO_PUBLICACAO"; unset HISTORICO_PUBLICACAO`. Fazer isso também em caso de falha, antes de encerrar.
 9. Mostrar o resultado ao mantenedor e esperar o ok. Só então: `gh repo edit alexander-stack1/cerebro-semantico --visibility public --accept-visibility-change-consequences`, e conferir com o comando do passo 8 da fase 1 (`PUBLIC`).
 
 Se qualquer item falhar, o repositório continua privado. Dado sensível achado no histórico não se resolve com um commit novo: o histórico precisa ser reescrito antes de abrir, com decisão do mantenedor.
