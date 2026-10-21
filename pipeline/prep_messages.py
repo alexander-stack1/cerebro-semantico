@@ -14,7 +14,8 @@ Efeitos:
     messages.sensitive_name_regex, ganha alias novo (prefixo messages.new_alias_prefix) gravado em aliases.
   - O texto passa por redact() e é cortado em messages.max_chars.
   - JID nunca sai no extrato: remetente sem nome vira '?' e conversa sem nome vira '[sem nome]'.
-    Nomes de remetente e de conversa também passam por redact() (contato salvo como número).
+    Nome igual a um JID conta como sem nome. Nomes de remetente e de conversa também passam por
+    redact() (contato salvo como número); conversas cujo nome a redação alterou seguem separadas.
   - Grupos com mais de group_sample.threshold mensagens viram amostra: todas as do dono mais
     keep_others das demais com min_len caracteres ou mais (semente fixa, resultado reprodutível).
 """
@@ -33,6 +34,12 @@ from redact import redact  # noqa: E402
 
 PLACEHOLDER = re.compile(r'(?i)sent (image|sticker|document|video|audio|gif|location)')
 NO_SENDER, NO_CHAT = '?', '[sem nome]'
+JID_LIKE = re.compile(r'\S+@\S+')
+
+
+def shown_name(name, empty):
+    """Nome que pode ir ao extrato: redigido, ou o marcador `empty` se faltar ou for um JID."""
+    return empty if not name or JID_LIKE.fullmatch(name) else redact(name)
 
 
 def segment_of(dom, sub, disp, mc, sens):
@@ -117,11 +124,12 @@ class Prep:
             elif self.sens.match(disp):
                 who = mc['sensitive_label']
             else:
-                who = redact(r.get('sender_name') or NO_SENDER)[:18]
+                who = shown_name(r.get('sender_name'), NO_SENDER)[:18]
             ts = (dt.datetime.strptime(r['timestamp'][:19], '%Y-%m-%dT%H:%M:%S') + self.tz).strftime('%m-%d %H:%M')
-            shown = disp if al or r['chat_jid'] in self.keys else redact(r.get('chat_name') or NO_CHAT)
-            # conversas sem nome se separam pelo JID na chave, que nunca é escrito
-            key = (shown, d, s, r['chat_jid'].endswith('@g.us'), r['chat_jid'] if shown == NO_CHAT else None)
+            raw = r.get('chat_name')
+            shown = disp if al or r['chat_jid'] in self.keys else shown_name(raw, NO_CHAT)
+            # nome ausente ou alterado pela redação: o JID separa as conversas na chave e nunca é escrito
+            key = (shown, d, s, r['chat_jid'].endswith('@g.us'), r['chat_jid'] if shown not in (raw, disp) else None)
             out[segment_of(d, s, disp, mc, self.sens)][key].append(f'{ts} {who}: {t}')
         return out, n_in
 

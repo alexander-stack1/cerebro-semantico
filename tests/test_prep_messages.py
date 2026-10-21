@@ -112,6 +112,23 @@ class PrepTest(unittest.TestCase):
         self.assertIn('[TEL]: bom dia', files['N1_trabalho'])
         self.assertIn('CONVERSA: Loja [TEL]', files['N9_outros'])
 
+    def test_nomes_que_redigem_igual_nao_fundem_conversas(self):
+        num_a, num_b = '5521' + '998765432', '5521' + '987654321'
+        files, _, report = self.run_prep([
+            msg(num_a + '@s.whatsapp.net', num_a, 'oi'),
+            msg(num_b + '@s.whatsapp.net', num_b, 'olá'),
+        ])
+        self.assertEqual(files['N9_outros'].count('===== CONVERSA: [TEL]'), 2)
+        self.assertIn('N9_outros: 2 msgs, 2 conversas', report)
+
+    def test_nome_igual_ao_jid_conta_como_sem_nome(self):
+        jid = '5521' + '998765432' + '@s.whatsapp.net'
+        files, _, _ = self.run_prep([msg(jid, jid, 'oi', sender=jid)])
+        txt = files['N9_outros']
+        self.assertNotIn('@', txt)
+        self.assertIn('CONVERSA: [sem nome]', txt)
+        self.assertIn('?: oi', txt)
+
 
 if __name__ == '__main__':
     unittest.main()
