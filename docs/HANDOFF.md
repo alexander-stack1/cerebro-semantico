@@ -19,12 +19,12 @@ Etapas da sessão de origem:
 | Parte | Estado |
 |---|---|
 | Pipeline (`pipeline/`) | Completo para o fluxo atual. Saída idêntica ao pipeline de origem (ADR-010). |
-| Testes (`tests/`) | 60 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
+| Testes (`tests/`) | 62 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
 | Exemplo (`examples/`) | Vault fictício de 59 arquivos, 40 temas em 8 categorias, 14 semanas. Grafo de 74 sinapses diretas e 5 latentes. |
 | Viewer (`prototype/`) | Funciona. Arquivo único de 127 KB, acima do limite de 20 KB (exceção em `.agent-size-ignore`). |
 | CI (`.github/workflows/ci.yml`) | Testes em Python 3.9 e 3.12 e limite de tamanho, no runner `ubuntu-24.04` (a imagem 26.04 não tem 3.9). Movido na fase 1, em 2026-10-21. |
 
-| Demonstrações (`docs/media/`) | Três capturas e dois vídeos do exemplo, com manifesto de origem. Roteiros e verificação em `docs/DEMONSTRACOES.md`. |
+| Demonstrações (`docs/media/`) | Três capturas e dois vídeos do exemplo, com manifesto de origem e prévias GIF. Roteiros e verificação em `docs/DEMONSTRACOES.md`. |
 
 ## Como foi verificado
 
@@ -81,7 +81,7 @@ Peça ao Claude Code: "Faça o checklist da fase 2 do docs/HANDOFF.md e me mostr
 4. Nenhum caminho da máquina do mantenedor no histórico: `grep -cE '/U[s]ers/|analise-w[h]atsapp' "$HISTORICO_PUBLICACAO"` responde `0`.
 5. E-mails de autor e committer conhecidos: `git log --all --format='%ae%n%ce' | sort -u` lista só o noreply da conta (`users.noreply.github.com`), `noreply@github.com` (committer dos merges feitos pelo GitHub) e o e-mail pessoal do mantenedor, que o squash merge grava como autor. O mantenedor aceitou esse e-mail em 2026-10-21 porque ele já é público. Qualquer outro endereço bloqueia a abertura.
 6. `examples/` só com conteúdo fictício. Rodar `python3 tools/visual/preview.py --check --verify-ci`: confere o run concluído e o artefato do GitHub byte a byte, além dos hashes de `docs/img/preview.png`, do grafo e das fontes registradas em `docs/img/preview-origin.json`. Para regenerar, `python3 tools/visual/preview.py` verifica a reprodução do vault/grafo, captura o HTML de exemplo em Chromium e grava o PNG sem conversão. Requer as dependências opcionais do smoke. O job `preview` do CI também gera a captura e oferece o artefato para download. Inspecione a imagem. A animação varia entre execuções; reproduz-se o procedimento, sem prometer pixels idênticos.
-   Para as mídias da galeria, execute também `python3 tools/visual/demo_media.py --verify-ci` e inspecione os três PNGs e os dois vídeos. Ver `docs/DEMONSTRACOES.md`.
+   Para as mídias da galeria, execute também `python3 tools/visual/animated_preview.py --check` e `python3 tools/visual/demo_media.py --verify-ci` e inspecione os três PNGs e os dois vídeos. Ver `docs/DEMONSTRACOES.md`.
 7. CI verde no último commit.
 8. Remover apenas o temporário criado nesta execução: `rm -f -- "$HISTORICO_PUBLICACAO"; unset HISTORICO_PUBLICACAO`. Fazer isso também em caso de falha, antes de encerrar.
 9. Mostrar o resultado ao mantenedor e esperar o ok. Só então: `gh repo edit alexander-stack1/cerebro-semantico --visibility public --accept-visibility-change-consequences`, e conferir com o comando do passo 8 da fase 1 (`PUBLIC`).

@@ -1,0 +1,48 @@
+{
+  "commands": [
+    [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-ss",
+      "20",
+      "-t",
+      "30",
+      "-i",
+      "docs/media/navegacao.mp4",
+      "-filter_complex",
+      "[0:v]fps=4,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=3",
+      "-loop",
+      "0",
+      "docs/media/navegacao.gif"
+    ],
+    [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-y",
+      "-ss",
+      "15",
+      "-t",
+      "30",
+      "-i",
+      "docs/media/linha-do-tempo.mp4",
+      "-filter_complex",
+      "[0:v]fps=4,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=3",
+      "-loop",
+      "0",
+      "docs/media/linha-do-tempo.gif"
+    ]
+  ],
+  "sha256": {
+    "docs/media/navegacao.mp4": "b4ff51eccede894e7963780af6cdf6dcd854801330ab7333ca52f87997027f70",
+    "docs/media/linha-do-tempo.mp4": "dcbb19f821d408769ca0fc64b0efbcf649ee59271bf215895bdfdc750bc56be0",
+    "docs/media/origin.json": "09dd0b669dabdb1d772c050813e26b76d9df9d2b74bac03f1ac7fc5663d8d225",
+    "tools/visual/animated_preview.py": "bea7c3be16956f0f633b0d98c87c75edfd62eaddc319a738e013a7e0391de942",
+    "docs/media/navegacao.gif": "eee7a477ba1f6a43ac3d66f8a9f28231ecb024faae2d12f7a1a87f1e6a7d4482",
+    "docs/media/linha-do-tempo.gif": "abb83722080068dab56005646918a4f41ba20140a92069098173c156e46deafe"
+  },
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "description": "Trechos de 30 segundos, 4 quadros/s, 720x450; sem aceleração."
+}

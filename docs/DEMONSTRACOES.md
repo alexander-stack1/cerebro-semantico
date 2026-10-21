@@ -39,3 +39,17 @@ python3 tools/visual/demo_media.py --verify-ci  # requer gh autenticado enquanto
 O segundo comando exige run bem-sucedido no workflow esperado e compara os arquivos locais, inclusive o manifesto, byte a byte com o artefato baixado. A retenção do artefato no GitHub é finita; se expirar, gere nova captura para renovar a prova remota. A animação pode produzir pixels diferentes a cada execução.
 
 Para atualizar, execute o workflow, inspecione imagens e vídeos, copie o artefato completo para `docs/media/`, rode os dois comandos e versione os arquivos juntos. Nunca substitua somente a imagem ou somente o manifesto.
+
+
+## Prévia animada e acesso ao MP4
+
+O MP4 está versionado, mas a página de arquivo do GitHub pode mostrar apenas “View raw”. Os READMEs em português e inglês usam links diretos de download, evitando essa página intermediária. Abra o MP4 baixado no player local. O acesso ao repositório privado continua exigindo autenticação.
+
+Os GIFs mostram trechos reais de 30 segundos, a 4 quadros por segundo, sem acelerar a gravação. Navegação usa o intervalo de 20 a 50 segundos; linha do tempo, de 15 a 45 segundos. A resolução da prévia é 720x450. Os MP4s completos continuam em 1440x900.
+
+```bash
+python3 tools/visual/animated_preview.py          # requer ffmpeg/ffprobe
+python3 tools/visual/animated_preview.py --check  # biblioteca padrão
+```
+
+[animated-origin.json](media/animated-origin.json) registra os comandos, a versão de ffmpeg e os hashes dos MP4s, do manifesto original, do gerador e dos GIFs. A geração verifica os vídeos de origem e confirma 120 quadros por GIF. Os testes protegem os hashes das prévias versionadas; a verificação remota dos MP4s continua em `demo_media.py --verify-ci`.
