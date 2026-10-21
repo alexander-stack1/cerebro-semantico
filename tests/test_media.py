@@ -40,3 +40,18 @@ class MediaOriginTest(unittest.TestCase):
             with patch.object(demo_media, 'ROOT', root):
                 with self.assertRaises(ValueError):
                     demo_media.check()
+
+    def test_video_truncado_bloqueia(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'fake.mp4'
+            path.write_bytes(b'\0\0\0\x08ftyp')
+            with self.assertRaises(ValueError):
+                demo_media.validate_video(path)
+
+    def test_origem_cobre_validador(self):
+        self.assertIn('tools/visual/preview.py', demo_media.INPUTS)
+        self.assertIn('pipeline/build_graph.py', demo_media.INPUTS)
+
+    def test_metadados_de_captura_obrigatorios(self):
+        with self.assertRaises(ValueError):
+            demo_media.validate_metadata({})

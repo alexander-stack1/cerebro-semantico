@@ -1,7 +1,7 @@
 """Captura o exemplo fictício: três PNGs e dois vídeos MP4, sem áudio.
 
 python3 tools/visual/demo_media.py             # Playwright + Chromium + ffmpeg
-python3 tools/visual/demo_media.py --check     # hashes locais, stdlib
+python3 tools/visual/demo_media.py --check     # hashes locais + ffmpeg/ffprobe
 python3 tools/visual/demo_media.py --verify-ci # também compara artefato remoto
 """
 import argparse
@@ -18,8 +18,8 @@ import preview
 
 ROOT = Path(__file__).resolve().parents[2]
 RECEIPT = 'docs/media/origin.json'
-INPUTS = ('prototype/cerebro-semantico-3d.html', 'examples/sample_graph.json',
-          'tools/visual/demo_media.py', '.github/workflows/media.yml')
+INPUTS = tuple(dict.fromkeys((*preview.INPUTS, 'tests/test_build_graph.py',
+    'tests/_util.py', 'tools/visual/demo_media.py', '.github/workflows/media.yml')))
 OUTPUTS = tuple('docs/media/' + p for p in (
     'visao-geral.png', 'tema-ativo.png', 'linha-do-tempo.png',
     'navegacao.mp4', 'linha-do-tempo.mp4'))
@@ -31,6 +31,31 @@ def hashes():
             for p in (*INPUTS, *OUTPUTS)}
 
 
+def validate_video(path):
+    if path.stat().st_size < 1024 or path.read_bytes()[4:8] != b'ftyp':
+        raise ValueError('MP4 truncado ou inválido')
+    info = json.loads(subprocess.check_output(['ffprobe', '-v', 'error',
+        '-show_entries', 'stream=codec_name,width,height:format=duration',
+        '-of', 'json', str(path)], text=True))
+    if (info.get('streams') != [{'codec_name': 'h264', 'width': 1440, 'height': 900}]
+            or not 10 <= float(info.get('format', {}).get('duration', 0)) <= 180):
+        raise ValueError('Vídeo incompleto ou formato inesperado')
+    subprocess.run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(path),
+                    '-f', 'null', '-'], check=True, capture_output=True)
+    return info
+
+
+def validate_metadata(receipt):
+    observations = receipt.get('observations', {})
+    expected = {p for p in OUTPUTS if p.endswith('.mp4')}
+    if (not receipt.get('capture') or set(receipt.get('videos', {})) != expected
+            or observations.get('selected') != 'Reforma do banheiro'
+            or not observations.get('first_week') or not observations.get('middle_week')
+            or observations['first_week'] == observations['middle_week']
+            or not observations.get('stats')):
+        raise ValueError('Metadados de captura incompletos')
+
+
 def check(remote=False):
     receipt = json.loads((ROOT / RECEIPT).read_text())
     for key in ('revision', 'head_revision'):
@@ -40,12 +65,13 @@ def check(remote=False):
         raise ValueError('Run de origem ausente')
     if receipt.get('sha256') != hashes():
         raise ValueError('Mídia ou fontes divergem dos hashes')
+    validate_metadata(receipt)
     preview.check_example()
     for name in OUTPUTS:
         if name.endswith('.png'):
             preview.validate_png((ROOT / name).read_bytes())
-        elif (ROOT / name).read_bytes()[4:8] != b'ftyp':
-            raise ValueError('MP4 inválido')
+        elif validate_video(ROOT / name) != receipt['videos'][name]:
+            raise ValueError('Metadados do vídeo divergem')
     if remote:
         run = receipt['ci_run']
         info = json.loads(subprocess.check_output(
@@ -136,11 +162,7 @@ def generate():
     probes = {}
     for name in OUTPUTS:
         if name.endswith('.mp4'):
-            probes[name] = json.loads(subprocess.check_output(['ffprobe', '-v', 'error',
-                '-show_entries', 'stream=codec_name,width,height:format=duration', '-of', 'json',
-                str(ROOT / name)], text=True))
-            if float(probes[name]['format']['duration']) < 10:
-                raise ValueError('Vídeo incompleto')
+            probes[name] = validate_video(ROOT / name)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     receipt = {'revision': revision, 'head_revision': os.environ.get('PREVIEW_HEAD_SHA', revision),
         'ci_run': os.environ.get('GITHUB_RUN_ID'), 'sha256': hashes(),
