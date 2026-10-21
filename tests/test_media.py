@@ -66,3 +66,8 @@ class MediaOriginTest(unittest.TestCase):
                     dict(expected, programs=[], stream_groups=[]))), patch.object(
                         demo_media.subprocess, 'run'):
                 self.assertEqual(demo_media.validate_video(path), expected)
+
+    def test_midia_versionada_confere_com_origem(self):
+        receipt = json.loads((demo_media.ROOT / demo_media.RECEIPT).read_text())
+        demo_media.validate_metadata(receipt)
+        self.assertEqual(receipt['sha256'], demo_media.hashes())

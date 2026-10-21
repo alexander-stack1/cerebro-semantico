@@ -3,7 +3,7 @@
 ```
 status: draft
 generated_at: 2026-10-21
-git_sha: 5ba3993
+git_sha: a0a5f8a
 generator: humano + Claude, revisão do mantenedor pendente
 ```
 
