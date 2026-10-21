@@ -19,7 +19,7 @@ Etapas da sessão de origem:
 | Parte | Estado |
 |---|---|
 | Pipeline (`pipeline/`) | Completo para o fluxo atual. Saída idêntica ao pipeline de origem (ADR-010). |
-| Testes (`tests/`) | 35 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
+| Testes (`tests/`) | 39 testes, só biblioteca padrão, rodam em menos de 1 segundo. |
 | Exemplo (`examples/`) | Vault fictício de 59 arquivos, 40 temas em 8 categorias, 14 semanas. Grafo de 74 sinapses diretas e 5 latentes. |
 | Viewer (`prototype/`) | Funciona. Arquivo único de 127 KB, acima do limite de 20 KB (exceção em `.agent-size-ignore`). |
 | CI (`docs/ci-workflow.yml`) | Testes em Python 3.9 e 3.12 e limite de tamanho. Pronto, mas fora do lugar: a ferramenta que gravou o repo não escreve em `.github/workflows/`. A fase 1 da publicação move o arquivo. Ainda não rodou: o repo não tem remoto. |
