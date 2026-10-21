@@ -56,6 +56,8 @@ O adaptador externo deve transformar cada mensagem em um objeto JSON por linha U
 | `transcript` | Opcional. Transcrição de áudio; usada quando `text` é um marcador de mídia ou está vazio. |
 | `sender_jid` | Pode vir na exportação, mas o pipeline não o utiliza. |
 
+Para grupos, o `chat_jid` deve terminar em `@g.us`: o pipeline usa esse sufixo para reconhecer grupos e aplicar a amostragem. Se o adaptador substituir o identificador por um valor opaco, preserve o sufixo e use o mesmo valor no `chat_map.json`. Sem ele, o grupo será tratado como conversa individual e a amostragem de grupos não será aplicada. O exemplo abaixo representa uma conversa individual.
+
 Exemplo sintético com identificadores ilustrativos. O adaptador deve mapear os identificadores reais de forma consistente, somente no ambiente privado:
 
 ```json

@@ -58,6 +58,8 @@ The external adapter must convert each message into one UTF-8 JSON object per li
 | `transcript` | Optional. Audio transcript, used when `text` is a media placeholder or empty. |
 | `sender_jid` | May be present in an export, but the pipeline does not use it. |
 
+For groups, `chat_jid` must end in `@g.us`: the pipeline uses this suffix to recognize groups and apply sampling. If your adapter replaces the identifier with an opaque value, preserve the suffix and use the same value in `chat_map.json`. Without it, the group is treated as a one-to-one conversation and group sampling does not apply. The example below represents a one-to-one conversation.
+
 Synthetic example with illustrative identifiers. Your adapter must map real identifiers consistently, only in your private environment:
 
 ```json
