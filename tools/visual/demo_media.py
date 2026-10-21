@@ -100,7 +100,7 @@ async def capture(folder):
                 record_video_dir=str(folder), record_video_size={'width': 1440, 'height': 900})
             page = await context.new_page()
             page.on('pageerror', lambda e: errors.append(str(e)))
-            await page.goto((ROOT / INPUTS[0]).as_uri())
+            await page.goto((ROOT / 'prototype/cerebro-semantico-3d.html').as_uri())
             await page.wait_for_function('!!window.CerebroSemantico', timeout=120000)
             await page.locator('#stats').filter(has_text='40').wait_for(timeout=120000)
             await page.wait_for_timeout(14000)
