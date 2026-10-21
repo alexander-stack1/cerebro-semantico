@@ -14,7 +14,11 @@ ALLOWED_EMAILS = frozenset({
     '266852435+alexander-stack1@users.noreply.github.com',
     'noreply@github.com',
 })
-EMAIL = re.compile(r'(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Za-z]{2,}(?![\w.-])')
+# Inclui pontuação válida na parte local e endereços com parte local entre aspas.
+EMAIL = re.compile(
+    r"""(?<![\w.!#$%&'*+/=?^`{|}~-])(?:[\w.!#$%&'*+/=?^`{|}~-]+|"(?:[^"\\]|\\.)+")"""
+    r"""@(?:[\w-]+\.)+[A-Za-z]{2,}(?![\w.-])"""
+)
 
 
 def scan(text):
@@ -24,17 +28,26 @@ def scan(text):
     do conteúdo. Outros dados continuam sujeitos aos detectores originais.
     """
     count = 0
+    unknown_email = False
 
     def replace(match):
-        nonlocal count
-        if match.group() in ALLOWED_EMAILS:
+        nonlocal count, unknown_email
+        address = match.group()
+        # Aspas simples/backticks envolvendo um literal não pertencem ao endereço.
+        if address[0] in ("'", '`') and text[match.end():match.end() + 1] == address[0]:
+            address = address[1:]
+        if address in ALLOWED_EMAILS:
             count += 1
             return '[EMAIL_AUTORIZADO]'
+        unknown_email = True
         return match.group()
 
     filtered = EMAIL.sub(replace, text)
+    blocking = detect(filtered)
+    if unknown_email and 'email' not in blocking:
+        blocking.append('email')
     return {'raw_findings': detect(text), 'allowed_email_occurrences': count,
-            'blocking_findings': detect(filtered)}
+            'blocking_findings': blocking}
 
 
 if __name__ == '__main__':

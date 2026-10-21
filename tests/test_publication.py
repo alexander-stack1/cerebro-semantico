@@ -24,6 +24,21 @@ class PublicationTest(unittest.TestCase):
             with self.subTest(address=address):
                 self.assertIn('email', scan(address)['blocking_findings'])
 
+    def test_pontuacao_e_caixa_nao_burlam_lista(self):
+        for address in ('outro!noreply' + '@github.com',
+                        "outro'noreply" + '@github.com',
+                        'outra-conta' + '@users.NOREPLY.GITHUB.COM'):
+            with self.subTest(address=address):
+                result = scan(address)
+                self.assertEqual(result['allowed_email_occurrences'], 0)
+                self.assertIn('email', result['blocking_findings'])
+
+    def test_delimitadores_de_codigo_preservam_endereco_completo(self):
+        for quote in ("'", '"', '`'):
+            result = scan(quote + 'noreply' + '@github.com' + quote)
+            self.assertEqual(result['allowed_email_occurrences'], 1)
+            self.assertEqual(result['blocking_findings'], [])
+
     def test_noreply_nao_oculta_outros_dados(self):
         text = 'noreply' + '@github.com senha: ' + 'abcdefgh12'
         self.assertIn('credencial', scan(text)['blocking_findings'])
