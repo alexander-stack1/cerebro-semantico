@@ -1,0 +1,28 @@
+# Dados pessoais: nunca versionar (ver docs/PRIVACIDADE.md)
+private/
+config/config.json
+config/*.local.json
+*.ndjson
+chat_map.json
+aliases.json
+_chaves*
+sensitive_names.txt
+extratos/
+cerebro*.zip
+/vault/
+
+# Saídas geradas a partir de dados reais
+out/
+shots/
+
+# Regras pessoais do mantenedor
+CLAUDE.local.md
+
+# Python e sistema
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+
+# Opcional do smoke visual
+node_modules/

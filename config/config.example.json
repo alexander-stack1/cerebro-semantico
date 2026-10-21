@@ -1,0 +1,124 @@
+{
+  "_comentario": "Exemplo para o vault fictício de examples/vault. Copie para config/config.json (fora do git) e ajuste ao seu vault. Chaves que começam com _ são comentários. Caminhos relativos partem desta pasta.",
+
+  "categories": {
+    "_comentario": "Cada categoria ocupa um lobo: frontalE, frontalD, parietalE, parietalD, temporalE, temporalD, limbico, posterior.",
+    "trabalho":    { "label": "Trabalho",          "color": "#4C8DFF", "lobe": "frontalE" },
+    "projetos":    { "label": "Projetos pessoais", "color": "#FF4FB0", "lobe": "frontalD" },
+    "saude":       { "label": "Saúde e rotina",    "color": "#2FE0B0", "lobe": "parietalE" },
+    "financas":    { "label": "Finanças",          "color": "#8BE36A", "lobe": "parietalD" },
+    "comunicacao": { "label": "Comunicação",       "color": "#E9E4FF", "lobe": "temporalE" },
+    "estudos":     { "label": "Estudos",           "color": "#A47BFF", "lobe": "temporalD" },
+    "casa":        { "label": "Casa e família",    "color": "#FFB547", "lobe": "limbico" },
+    "lazer":       { "label": "Lazer e viagens",   "color": "#FF6B5A", "lobe": "posterior" }
+  },
+
+  "vault": {
+    "path": "../examples/vault",
+    "ignore_files": ["LEIA-ME.md", "README.md"],
+    "events_prefix": "Eventos",
+    "_folders": "Pasta do vault -> categoria. null tira a pasta do grafo.",
+    "folders": {
+      "10_Trabalho": "trabalho",
+      "20_Projetos": "projetos",
+      "30_Estudos": "estudos",
+      "40_Comunicacao": "comunicacao",
+      "50_Casa_Familia": "casa",
+      "70_Saude_Rotina": "saude",
+      "00_Mapa": null,
+      "05_Pessoas": null,
+      "90_Linha_do_tempo": null
+    },
+    "_folder_by_field": "Pasta que se divide por um campo do frontmatter.",
+    "folder_by_field": {
+      "60_Financas_Lazer": { "field": "dominio", "map": { "Financeiro": "financas" }, "default": "lazer" }
+    },
+    "_title_category": "Nota específica que entra numa categoria mesmo estando numa pasta fora do grafo.",
+    "title_category": { "Painel de metas": "projetos" },
+    "person_type": "pessoa",
+    "exclude_types": ["pessoa", "hub", "periodo", "eventos", "linha-do-tempo", "pendencias"],
+    "exclude_titles": ["Mapa do cérebro"],
+    "exclude_title_prefixes": ["Eventos", "Linha do tempo", "Pendências", "Hub "],
+    "latent_skip_types": ["hub", "periodo", "eventos", "linha-do-tempo"],
+    "latent_skip_prefixes": ["Eventos", "Linha do tempo", "Hub ", "Mapa"],
+    "stop_tags": ["rotina", "eventos"],
+    "type_labels": {
+      "tema": "tema", "projeto": "projeto", "decisao": "decisão", "fluxo": "fluxo", "rotina": "rotina",
+      "voz": "voz", "resposta": "respostas", "financeiro": "financeiro", "viagem": "viagem", "lazer": "lazer",
+      "evento": "evento", "agenda": "agenda"
+    }
+  },
+
+  "graph": {
+    "_rename": "Título da nota -> nome exibido. Use para tirar nome próprio que a limpeza automática não pega.",
+    "rename": { "Viagem de férias para a serra": "Viagem de férias" },
+    "_owner_names": "Nomes da dona ou do dono do vault: ficam nos títulos.",
+    "owner_names": ["Bia"],
+    "person_scan_ignore": ["dona"],
+    "person_scan_allow": [],
+    "max_latent_per_node": 2,
+    "latent_max_shared": 14
+  },
+
+  "timeline": {
+    "start": "2026-07-13",
+    "folder": "90_Linha_do_tempo",
+    "months_from": "2026-07",
+    "period_start": "2026-07-13",
+    "domains": ["Profissional", "Pessoal", "Lazer", "Viagens", "Financeiro"],
+    "source_label": "o vault de exemplo",
+    "fonte": "Eventos das áreas do vault de exemplo",
+    "area_labels": {
+      "10_Trabalho": "Trabalho", "20_Projetos": "Projetos", "30_Estudos": "Estudos", "40_Comunicacao": "Comunicação",
+      "50_Casa_Familia": "Casa e família", "60_Financas_Lazer": "Finanças e lazer", "70_Saude_Rotina": "Saúde"
+    },
+    "related": {
+      "month": ["[[Linha do tempo]]", "[[Mapa do cérebro]]"],
+      "future": ["[[Linha do tempo]]"],
+      "index": ["[[Mapa do cérebro]]", "[[Linha do tempo Próximos]]"]
+    },
+    "links": {
+      "month": ["[[Linha do tempo]] porque reúne os meses.", "[[Mapa do cérebro]] porque indexa as áreas de origem."],
+      "future": ["[[Linha do tempo]] porque reúne os meses."],
+      "index": ["[[Mapa do cérebro]] porque lista as áreas.", "[[Linha do tempo Próximos]] porque guarda o que ainda vai acontecer."]
+    }
+  },
+
+  "messages": {
+    "_comentario": "Só para prep_messages.py. Segmentos são avaliados em ordem; a primeira regra que casa vence.",
+    "timezone_offset_hours": -3,
+    "max_chars": 500,
+    "me_label": "EU",
+    "sensitive_label": "ELE",
+    "sensitive_alias_regex": "^(Cliente|Contraparte|Colega|Novo)-\\d+$",
+    "new_alias_prefix": "Novo",
+    "sensitive_sub_prefixes": ["Clientes"],
+    "sensitive_name_regex": "(?i)\\b(dr\\.?|dra\\.?|consult[oó]rio|escrit[oó]rio)\\b",
+    "unclassified": { "dom": "Não classificado", "sub": "Revisar" },
+    "aliased_fallback": { "dom": "Profissional", "sub": "Clientes (regra)" },
+    "sensitive_segment": "N0_sigiloso",
+    "segments": [
+      { "out": "N1_trabalho", "sub": ["Equipe", "Fornecedores", "Administrativo"] },
+      { "out": "N2_estudos", "sub": ["Cursos", "Leituras"] },
+      { "out": "N3_casa", "dom": ["Pessoal"] },
+      { "out": "N4_financas_viagens", "dom": ["Financeiro", "Viagens"] },
+      { "out": "N5_lazer", "dom": ["Lazer"] }
+    ],
+    "default_segment": "N9_outros",
+    "group_sample": { "threshold": 400, "keep_others": 150, "min_len": 70, "seed": 3 }
+  },
+
+  "lint": {
+    "forbidden_phrases": ["é importante ressaltar", "vale destacar", "vale ressaltar", "no contexto de", "diante do exposto", "em suma"],
+    "phrase_exempt_files_regex": "Anti-padr|Checklist",
+    "flag_dashes": true,
+    "sensitive_name_min_len": 8
+  },
+
+  "private": {
+    "_comentario": "Arquivos sigilosos. A pasta private/ está no .gitignore.",
+    "chat_map": "../private/chat_map.json",
+    "aliases": "../private/aliases.json",
+    "sensitive_names": "../private/sensitive_names.txt"
+  }
+}

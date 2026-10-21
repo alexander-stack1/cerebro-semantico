@@ -1,0 +1,2297 @@
+<!doctype html>
+<!--
+  CÉREBRO SEMÂNTICO INTERATIVO 3D
+  ================================
+  Arquivo único, pronto para abrir no navegador (duplo clique ou servidor estático).
+
+  Stack:
+    - Three.js r160 (ES modules via importmap, CDN jsDelivr)
+    - Addons: OrbitControls, EffectComposer, RenderPass, UnrealBloomPass, OutputPass
+    - GSAP 3.12.5 (transições de câmera, pulsos e tweens de uniforms)
+    - GLSL próprio: nós com ruído simplex + fresnel, sinapses Catmull-Rom calculadas na GPU,
+      fótons e partículas com sprites procedurais.
+
+  Arquitetura (resumo):
+    1. DADOS        Dois JSON internos: BRAIN_DATA (grafo gerado por pipeline/build_graph.py e injetado por
+                    pipeline/embed_viewer.py; no repositório, o vault fictício de examples/) e MOCK_GRAPH
+                    (exemplo mínimo escrito à mão). O botão "Ver exemplo" alterna.
+                    Troque por outro com CerebroSemantico.setData(json).
+    2. CÉREBRO      Córtex procedural (hemisférios com giros e sulcos, fissura, cerebelo, tronco) em vidro
+                    translúcido, ≈13 mil pontos de luz nos giros e ≈2.400 neurônios internos ligados por fibras
+                    com pulsos. Cada categoria ocupa um lobo; a área do campo ativo acende no córtex.
+    2b. FÍSICA      Molas de Hooke prendem cada neurônio ao seu lobo; molas fracas entre neurônios ligados.
+    2c. TEMPO       Linha do tempo semanal. Calor de cada tema = registros datados com meia-vida de 3 semanas;
+                    define tamanho e brilho do neurônio, força das sinapses e o mapa de calor dos lobos.
+    3. NÓS          Uma Mesh por nó, geometria compartilhada, ShaderMaterial com displacement e fresnel.
+    4. SINAPSES     UMA InstancedMesh (1 draw call) de tubos. A curva Catmull-Rom é avaliada no vertex shader
+                    com a mesma fórmula do THREE.CatmullRomCurve3 ('catmullrom', tension 0.5).
+    5. FÓTONS       Quads instanciados (1 draw call) que viajam pelas curvas. Posições via CatmullRomCurve3.getPoint.
+    6. DISPARO      Pool fixo de partículas (sem alocação no clique) + casca de onda de choque.
+    7. INTERAÇÃO    Raycast sob demanda contra esferas analíticas (O(n), sem testar triângulos).
+    8. CICLO DE VIDA disposeGraph() e destroy() liberam geometrias, materiais, texturas e listeners.
+
+  API global (para integrar com dados reais):
+    window.CerebroSemantico.setData(json)   reconstrói o grafo com outro JSON (mesmo formato do MOCK_GRAPH)
+    window.CerebroSemantico.select(id)      ativa um nó por id ou pelo nome
+    window.CerebroSemantico.reset()         volta à visão geral
+    window.CerebroSemantico.destroy()       desmonta tudo (útil dentro de SPA)
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cérebro Semântico 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- Import map: resolve "three" e "three/addons/" para versões fixas -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<!-- GSAP clássico (global window.gsap). Carrega antes do módulo, que é diferido. -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+
+<style>
+  /* Layout: cena WebGL em tela cheia, HUD de vidro fosco nas bordas, painel lateral do nó ativo.
+     Tema único escuro por escolha (cena cósmica): cores explícitas e color-scheme dark. */
+  :root{
+    color-scheme:dark;
+    --bg:#04050a;
+    --ink:rgba(236,240,255,.94);
+    --muted:rgba(196,206,232,.56);
+    --faint:rgba(196,206,232,.32);
+    --line:rgba(255,255,255,.09);
+    --glass:rgba(10,12,22,.58);
+    --glass-strong:rgba(10,12,22,.78);
+    --latent:#ffd27a;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Sora",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;overflow:hidden;overscroll-behavior:none}
+  #scene{position:fixed;inset:0;touch-action:none}
+  #scene canvas{display:block;width:100%;height:100%;outline:none}
+  /* vinheta: escurece as bordas e dá profundidade "cósmica" */
+  .vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 45%,transparent 52%,rgba(0,0,0,.55) 82%,rgba(0,0,0,.85) 100%)}
+  /* grão fino sobre a imagem (textura analógica) */
+  .grain{position:fixed;inset:-50%;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    animation:grain 1.2s steps(6) infinite}
+  @keyframes grain{0%{transform:translate(0,0)}25%{transform:translate(-3%,2%)}50%{transform:translate(2%,-3%)}75%{transform:translate(-2%,-1%)}100%{transform:translate(0,0)}}
+
+  /* ---------- rótulos flutuantes (DOM projetado do 3D) ---------- */
+  #labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+  .label{position:absolute;left:0;top:0;display:flex;align-items:center;gap:8px;white-space:nowrap;
+    font-size:11px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);
+    padding:6px 11px 6px 9px;border-radius:999px;background:rgba(6,8,16,.5);
+    border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    opacity:0;transition:opacity .35s ease, font-size .3s ease, padding .3s ease;will-change:transform,opacity}
+  .label i{width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c),0 0 2px var(--c)}
+  .label.big{font-size:13px;padding:8px 14px 8px 11px;border-color:color-mix(in srgb,var(--c) 55%,transparent)}
+  .label small{font-family:var(--mono);font-size:10px;letter-spacing:.02em;color:var(--muted);text-transform:none}
+
+  /* ---------- HUD ---------- */
+  .hud{position:fixed;top:calc(22px + env(safe-area-inset-top,0px));left:calc(24px + env(safe-area-inset-left,0px));max-width:min(560px,calc(100vw - 48px));pointer-events:none}
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.26em;text-transform:uppercase;color:var(--faint)}
+  .hud h1{margin:8px 0 6px;font-size:28px;font-weight:500;letter-spacing:-.025em;line-height:1}
+  .stats{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px;pointer-events:auto}
+  .chip{font:inherit;font-size:12px;color:var(--ink);display:inline-flex;align-items:center;gap:8px;
+    padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.035);border:1px solid var(--line);
+    cursor:pointer;transition:background .2s,border-color .2s,opacity .2s;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  .chip:hover{background:rgba(255,255,255,.08)}
+  .chip i{width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c)}
+  .chip.on{background:rgba(255,255,255,.12);border-color:color-mix(in srgb,var(--c) 70%,transparent)}
+  .chip.mute{opacity:.45}
+  .chip[hidden]{display:none}
+  .chip b{font-family:var(--mono);font-weight:400;font-size:10.5px;color:var(--muted)}
+
+  .toolbar{position:fixed;left:calc(24px + env(safe-area-inset-left,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .toolbar .chip[aria-pressed="true"]{background:rgba(255,255,255,.12)}
+  .fps{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:6px}
+  .hint{position:fixed;right:calc(24px + env(safe-area-inset-right,0px));top:calc(72px + env(safe-area-inset-top,0px));max-width:300px;text-align:right;line-height:1.6;font-family:var(--mono);font-size:11px;
+    color:var(--faint);letter-spacing:.04em;pointer-events:none;transition:opacity .6s}
+
+  /* busca */
+  .search{position:fixed;top:calc(22px + env(safe-area-inset-top,0px));right:calc(24px + env(safe-area-inset-right,0px));width:260px}
+  .search input{width:100%;font:inherit;font-size:13px;color:var(--ink);padding:10px 14px 10px 36px;border-radius:999px;
+    background:var(--glass);border:1px solid var(--line);outline:none;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .search input:focus{border-color:rgba(255,255,255,.28)}
+  .search svg{position:absolute;left:13px;top:11px;width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:1.8}
+  .sugg{list-style:none;margin:6px 0 0;padding:6px;border-radius:16px;background:var(--glass-strong);border:1px solid var(--line);
+    backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);display:none}
+  .sugg.on{display:block}
+  .sugg button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-radius:10px;
+    font-size:13px;cursor:pointer;color:var(--ink)}
+  .sugg button:hover,.sugg button.kb{background:rgba(255,255,255,.08)}
+  .sugg i{width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c)}
+  .sugg span{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+
+  /* painel do nó ativo */
+  .panel{position:fixed;top:calc(78px + env(safe-area-inset-top,0px));right:calc(24px + env(safe-area-inset-right,0px));width:340px;max-height:calc(100% - 210px);overflow:auto;padding:22px;
+    border-radius:22px;background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(18px) saturate(140%);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);opacity:0;transform:translateX(16px);pointer-events:none;
+    transition:opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1);scrollbar-width:thin}
+  .panel.open{opacity:1;transform:none;pointer-events:auto}
+  .p-cat{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--muted)}
+  .p-cat i{width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c)}
+  .p-meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin:-6px 0 14px}
+  .panel h2{margin:10px 0 14px;font-size:30px;font-weight:500;letter-spacing:-.03em;line-height:1.02}
+  .meter{display:grid;grid-template-columns:52px 1fr 40px;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+  .bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+  .bar b{display:block;height:100%;border-radius:99px;background:var(--c);box-shadow:0 0 12px var(--c)}
+  .mono{font-family:var(--mono);font-size:11px;color:var(--ink);text-align:right}
+  .p-sub{margin:16px 0 8px;font-size:12px;color:var(--muted);line-height:1.5}
+  .conns{list-style:none;margin:0;padding:0}
+  .conns button{all:unset;box-sizing:border-box;width:100%;display:grid;grid-template-columns:10px 1fr 62px 34px;align-items:center;gap:10px;
+    padding:9px 8px;border-radius:12px;cursor:pointer;font-size:13px}
+  .conns button:hover{background:rgba(255,255,255,.06)}
+  .conns i{width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c)}
+  .conns em{font-style:normal;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--latent);margin-left:6px}
+  .ghost{all:unset;cursor:pointer;margin-top:16px;display:inline-flex;font-size:12px;color:var(--muted);padding:8px 12px;border-radius:999px;border:1px solid var(--line)}
+  .ghost:hover{color:var(--ink);background:rgba(255,255,255,.05)}
+
+  /* linha do tempo semanal */
+  .timeline{position:fixed;right:calc(24px + env(safe-area-inset-right,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));width:440px;
+    display:grid;grid-template-columns:38px 1fr;gap:12px;align-items:center;padding:10px 14px 10px 10px;border-radius:20px;
+    background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+  .tl-play{all:unset;cursor:pointer;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);border:1px solid var(--line)}
+  .tl-play:hover{background:rgba(255,255,255,.14)}
+  .tl-play:focus-visible,.tl-bars button:focus-visible,.timeline input:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:2px}
+  .tl-play svg{width:14px;height:14px;fill:var(--ink)}
+  .tl-head{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .tl-head b{font-weight:500;color:var(--ink)}
+  .tl-bars{display:flex;align-items:flex-end;gap:3px;height:26px;margin:6px 0 4px}
+  .tl-bars button{all:unset;cursor:pointer;flex:1;min-height:2px;border-radius:2px;background:rgba(255,255,255,.18);transition:background .2s}
+  .tl-bars button:hover{background:rgba(255,255,255,.4)}
+  .tl-bars button.on{background:#9fd8ff;box-shadow:0 0 10px rgba(159,216,255,.7)}
+  .timeline input[type=range]{width:100%;margin:0;accent-color:#9fd8ff;height:14px}
+  .p-spark{display:flex;align-items:flex-end;gap:2px;height:30px;margin:12px 0 4px}
+  .p-spark i{flex:1;min-height:2px;border-radius:2px;background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .p-spark i.on{background:var(--c);box-shadow:0 0 8px var(--c)}
+  .fallback{position:fixed;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:var(--muted)}
+
+  @media (max-width:760px){
+    .hud h1{font-size:22px}
+    .legend{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+    .search{top:auto;bottom:calc(150px + env(safe-area-inset-bottom,0px));right:16px;left:16px;width:auto}
+    .timeline{left:16px;right:16px;width:auto;bottom:calc(58px + env(safe-area-inset-bottom,0px))}
+    .toolbar{left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));padding:0 max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+    .toolbar .chip{flex:none}
+    .fps,.hint{display:none}
+    .panel{top:auto;bottom:calc(202px + env(safe-area-inset-bottom,0px));left:16px;right:16px;width:auto;max-height:34vh;transform:translateY(16px)}
+    .hud{left:max(16px,env(safe-area-inset-left,0px));top:calc(16px + env(safe-area-inset-top,0px))}
+  }
+  @media (prefers-reduced-motion:reduce){.grain{animation:none}}
+</style>
+</head>
+<body>
+  <div id="scene" aria-label="Grafo 3D interativo dos campos da vida"></div>
+  <div class="vignette"></div>
+  <div class="grain"></div>
+  <div id="labels"></div>
+
+  <header class="hud">
+    <div class="eyebrow" id="eyebrow">Cognitive graph · sinapses semânticas</div>
+    <h1>Cérebro Semântico</h1>
+    <div class="stats" id="stats"></div>
+    <nav class="legend" id="legend" aria-label="Categorias"></nav>
+  </header>
+
+  <div class="search">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Buscar campo  ( / )" autocomplete="off" aria-label="Buscar campo">
+    <ul class="sugg" id="sugg"></ul>
+  </div>
+
+  <aside class="panel" id="panel" aria-live="polite"></aside>
+
+  <div class="toolbar">
+    <button class="chip" id="btnReset">Visão geral</button>
+    <button class="chip" id="btnOrbit" aria-pressed="true">Auto-órbita</button>
+    <button class="chip" id="btnLabels" aria-pressed="false">Todos os rótulos</button>
+    <button class="chip" id="btnRebuild">Reorganizar</button>
+    <button class="chip" id="btnData">Ver exemplo</button>
+    <span class="fps" id="fps"></span>
+  </div>
+  <div class="timeline" id="timeline" hidden>
+    <button class="tl-play" id="tlPlay" aria-label="Reproduzir as semanas"><svg viewBox="0 0 16 16" id="tlIcon"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+    <div>
+      <div class="tl-head"><span id="tlLabel"></span><span id="tlCount"></span></div>
+      <div class="tl-bars" id="tlBars" role="group" aria-label="Registros datados por semana"></div>
+      <input type="range" id="tlRange" min="0" max="0" step="1" value="0" aria-label="Semana">
+    </div>
+  </div>
+  <div class="hint" id="hint">Arraste para orbitar · Role para aproximar · Clique em um campo para ativar · Esc volta</div>
+  <div class="fallback" id="fallback">Este navegador não oferece WebGL. Abra em Chrome, Edge, Safari ou Firefox atualizados.</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const gsap = window.gsap;
+
+/* =====================================================================================
+   1. DADOS (MOCK DATA DO COGNITIVE GRAPH)
+   -------------------------------------------------------------------------------------
+   Formato:
+     categories: { [chave]: { label, color } }
+     nodes: [{ id, name, category, weight (0..1, importância visual), connections: [{ id, proximity (0.1..1.0) }] }]
+   As conexões podem ser declaradas de um lado só. O normalizador cria a aresta não dirigida
+   e, se ela aparecer duas vezes, mantém a maior proximidade.
+   Proximidade abaixo de LATENT_THRESHOLD vira "conexão latente": quase invisível no repouso,
+   acende quando um dos nós é ativado.
+   ===================================================================================== */
+const LATENT_THRESHOLD = 0.35;
+
+const MOCK_GRAPH = {
+  categories: {
+    carreira:  { label: 'Carreira',        color: '#4C8DFF', lobe: 'frontalE' },
+    projetos:  { label: 'Projetos',        color: '#FF4FB0', lobe: 'frontalD' },
+    financas:  { label: 'Finanças',        color: '#A47BFF', lobe: 'parietalD' },
+    saude:     { label: 'Saúde',           color: '#2FE0B0', lobe: 'parietalE' },
+    relacoes:  { label: 'Relacionamentos', color: '#FFB547', lobe: 'limbico' },
+    lazer:     { label: 'Lazer',           color: '#FF6B5A', lobe: 'posterior' },
+    proposito: { label: 'Propósito',       color: '#E9E4FF', lobe: 'temporalD' }
+  },
+  nodes: [
+    // ---- nós principais (hubs) ----
+    { id: 'carreira',  name: 'Carreira',        category: 'carreira',  weight: 1.0,
+      connections: [ { id: 'docencia', proximity: 0.6 }, { id: 'estudos', proximity: 0.65 }, { id: 'projetos', proximity: 0.55 },
+                     { id: 'renda', proximity: 0.8 }, { id: 'legado', proximity: 0.4 }, { id: 'conteudo', proximity: 0.4 } ] },
+    { id: 'saude',     name: 'Saúde',           category: 'saude',     weight: 1.0,
+      connections: [ { id: 'sono', proximity: 0.75 }, { id: 'exercicio', proximity: 0.8 }, { id: 'saudeMental', proximity: 0.85 } ] },
+    { id: 'financas',  name: 'Finanças',        category: 'financas',  weight: 1.0,
+      connections: [ { id: 'renda', proximity: 0.9 }, { id: 'investimentos', proximity: 0.8 }, { id: 'casa', proximity: 0.75 },
+                     { id: 'viagens', proximity: 0.32 } ] },
+    { id: 'relacoes',  name: 'Relacionamentos', category: 'relacoes',  weight: 1.0,
+      connections: [ { id: 'familia', proximity: 0.95 }, { id: 'amizades', proximity: 0.7 }, { id: 'casamento', proximity: 0.7 } ] },
+    { id: 'projetos',  name: 'Projetos',        category: 'projetos',  weight: 1.0,
+      connections: [ { id: 'empresa', proximity: 0.95 }, { id: 'conteudo', proximity: 0.6 }, { id: 'legado', proximity: 0.32 } ] },
+
+    // ---- carreira ----
+    { id: 'trabalho',  name: 'Trabalho Atual',  category: 'carreira',  weight: 0.92,
+      connections: [ { id: 'financas', proximity: 0.92 }, { id: 'estresse', proximity: 0.88 }, { id: 'carreira', proximity: 0.9 },
+                     { id: 'oficio', proximity: 0.8 }, { id: 'tempoLivre', proximity: 0.22 }, { id: 'familia', proximity: 0.28 },
+                     { id: 'sono', proximity: 0.3 } ] },
+    { id: 'oficio',    name: 'Ofício',          category: 'carreira',  weight: 0.78,
+      connections: [ { id: 'renda', proximity: 0.75 }, { id: 'empresa', proximity: 0.5 }, { id: 'docencia', proximity: 0.45 } ] },
+    { id: 'docencia',  name: 'Docência',        category: 'carreira',  weight: 0.58,
+      connections: [ { id: 'estudos', proximity: 0.45 }, { id: 'proposito', proximity: 0.4 } ] },
+    { id: 'estudos',   name: 'Estudos',         category: 'carreira',  weight: 0.55,
+      connections: [ { id: 'produtos', proximity: 0.7 }, { id: 'empresa', proximity: 0.6 } ] },
+
+    // ---- projetos ----
+    { id: 'empresa',   name: 'Empresa Própria', category: 'projetos', weight: 0.82,
+      connections: [ { id: 'produtos', proximity: 0.85 }, { id: 'investimentos', proximity: 0.38 }, { id: 'financas', proximity: 0.55 },
+                     { id: 'estresse', proximity: 0.45 }, { id: 'tempoLivre', proximity: 0.18 } ] },
+    { id: 'produtos',  name: 'Produtos',        category: 'projetos',  weight: 0.6,
+      connections: [ { id: 'conteudo', proximity: 0.4 } ] },
+    { id: 'conteudo',  name: 'Marca Pessoal',   category: 'projetos',  weight: 0.48,
+      connections: [ { id: 'futebol', proximity: 0.28 } ] },
+
+    // ---- saúde ----
+    { id: 'estresse',  name: 'Estresse',        category: 'saude',     weight: 0.72,
+      connections: [ { id: 'saudeMental', proximity: 0.9 }, { id: 'meditacao', proximity: 0.7 }, { id: 'sono', proximity: 0.65 },
+                     { id: 'exercicio', proximity: 0.4 } ] },
+    { id: 'saudeMental', name: 'Saúde Mental',  category: 'saude',     weight: 0.82,
+      connections: [ { id: 'meditacao', proximity: 0.6 }, { id: 'proposito', proximity: 0.4 }, { id: 'familia', proximity: 0.36 } ] },
+    { id: 'meditacao', name: 'Meditação',       category: 'saude',     weight: 0.46,
+      connections: [ { id: 'fe', proximity: 0.3 }, { id: 'tempoLivre', proximity: 0.35 } ] },
+    { id: 'sono',      name: 'Sono',            category: 'saude',     weight: 0.5,  connections: [] },
+    { id: 'exercicio', name: 'Exercício',       category: 'saude',     weight: 0.5,
+      connections: [ { id: 'tempoLivre', proximity: 0.35 } ] },
+
+    // ---- finanças ----
+    { id: 'renda',     name: 'Renda',           category: 'financas',  weight: 0.62, connections: [] },
+    { id: 'investimentos', name: 'Investimentos', category: 'financas', weight: 0.55, connections: [] },
+    { id: 'casa',      name: 'Casa Nova',       category: 'financas',  weight: 0.6,
+      connections: [ { id: 'familia', proximity: 0.6 }, { id: 'casamento', proximity: 0.7 } ] },
+
+    // ---- relacionamentos ----
+    { id: 'familia',   name: 'Família',         category: 'relacoes',  weight: 0.95,
+      connections: [ { id: 'tempoLivre', proximity: 0.78 }, { id: 'proposito', proximity: 0.85 }, { id: 'filho', proximity: 0.9 },
+                     { id: 'casamento', proximity: 0.88 }, { id: 'viagens', proximity: 0.45 }, { id: 'fe', proximity: 0.5 } ] },
+    { id: 'filho',     name: 'Paternidade',     category: 'relacoes',  weight: 0.72,
+      connections: [ { id: 'tempoLivre', proximity: 0.6 }, { id: 'legado', proximity: 0.55 } ] },
+    { id: 'casamento', name: 'Casamento',       category: 'relacoes',  weight: 0.76,
+      connections: [ { id: 'viagens', proximity: 0.5 } ] },
+    { id: 'amizades',  name: 'Amizades',        category: 'relacoes',  weight: 0.46,
+      connections: [ { id: 'games', proximity: 0.6 }, { id: 'futebol', proximity: 0.55 }, { id: 'fe', proximity: 0.4 } ] },
+
+    // ---- lazer ----
+    { id: 'tempoLivre', name: 'Tempo Livre',    category: 'lazer',     weight: 0.66,
+      connections: [ { id: 'games', proximity: 0.7 }, { id: 'futebol', proximity: 0.6 }, { id: 'viagens', proximity: 0.65 } ] },
+    { id: 'games',     name: 'Games',           category: 'lazer',     weight: 0.5,
+      connections: [ { id: 'estresse', proximity: 0.25 } ] },
+    { id: 'futebol',   name: 'Futebol',         category: 'lazer',     weight: 0.46, connections: [] },
+    { id: 'viagens',   name: 'Viagens',         category: 'lazer',     weight: 0.56, connections: [] },
+
+    // ---- propósito ----
+    { id: 'proposito', name: 'Propósito',       category: 'proposito', weight: 0.92,
+      connections: [ { id: 'fe', proximity: 0.8 }, { id: 'legado', proximity: 0.75 }, { id: 'carreira', proximity: 0.5 } ] },
+    { id: 'fe',        name: 'Música',          category: 'proposito', weight: 0.6,  connections: [] },
+    { id: 'legado',    name: 'Legado',          category: 'proposito', weight: 0.52, connections: [] }
+  ]
+};
+
+/* -------------------------------------------------------------------------------------
+   BRAIN_DATA: grafo gerado por pipeline/build_graph.py a partir de um vault Obsidian e injetado
+   aqui por pipeline/embed_viewer.py. Cada nó é uma nota de tema, projeto, decisão, fluxo,
+   rotina ou voz. Notas de pessoas, eventos, linhas do tempo, hubs e pendências ficam de fora.
+   Títulos com nomes próprios são reescritos. Nenhum trecho de mensagem entra aqui.
+   null = a página abre direto no MOCK_GRAPH. Formato completo: docs/FORMATO_GRAFO.md.
+     peso         = grau do nó no grafo de links do vault, normalizado
+     proximidade  = 0.45 base, +0.2 se o link é recíproco, +até 0.35 por vizinhança compartilhada (Jaccard)
+     latentes     = pares sem link direto que dividem uma pessoa ou duas tags (no máximo 2 por nó)
+   ------------------------------------------------------------------------------------- */
+const BRAIN_DATA = {"categories":{"trabalho":{"label":"Trabalho","color":"#4C8DFF","lobe":"frontalE"},"projetos":{"label":"Projetos pessoais","color":"#FF4FB0","lobe":"frontalD"},"saude":{"label":"Saúde e rotina","color":"#2FE0B0","lobe":"parietalE"},"financas":{"label":"Finanças","color":"#8BE36A","lobe":"parietalD"},"comunicacao":{"label":"Comunicação","color":"#E9E4FF","lobe":"temporalE"},"estudos":{"label":"Estudos","color":"#A47BFF","lobe":"temporalD"},"casa":{"label":"Casa e família","color":"#FFB547","lobe":"limbico"},"lazer":{"label":"Lazer e viagens","color":"#FF6B5A","lobe":"posterior"}},"nodes":[{"id":"n000","name":"Alimentação da semana","category":"saude","weight":1.0,"meta":"rotina · confiança alta","connections":[{"id":"n001","proximity":0.54},{"id":"n003","proximity":0.45},{"id":"n007","proximity":0.84},{"id":"n010","proximity":0.8},{"id":"n018","proximity":0.74},{"id":"n035","proximity":0.79}],"act":[2,1,3,1,1,6,0,0,0,1,1,3,0,0]},{"id":"n001","name":"Almoço de domingo em família","category":"casa","weight":0.82,"meta":"rotina · confiança alta","connections":[{"id":"n002","proximity":0.7},{"id":"n007","proximity":0.76},{"id":"n016","proximity":0.45},{"id":"n023","proximity":0.17}],"act":[3,1,3,3,0,0,1,3,1,5,3,1,2,2]},{"id":"n002","name":"Aniversário da mãe","category":"casa","weight":0.61,"meta":"evento · confiança media","connections":[{"id":"n025","proximity":0.45}],"act":[0,2,0,1,0,0,0,0,0,0,1,0,0,0]},{"id":"n003","name":"Aplicativo de lista de compras","category":"projetos","weight":0.72,"meta":"projeto · confiança media","connections":[{"id":"n022","proximity":0.45},{"id":"n025","proximity":0.65}],"act":[0,0,0,0,0,0,4,0,3,4,1,0,0,3]},{"id":"n004","name":"Apresentação trimestral","category":"comunicacao","weight":0.91,"meta":"projeto · confiança media","connections":[{"id":"n006","proximity":0.17},{"id":"n008","proximity":0.54},{"id":"n022","proximity":0.62},{"id":"n030","proximity":0.75},{"id":"n032","proximity":0.61},{"id":"n036","proximity":0.83}],"act":[0,0,0,0,0,2,0,0,0,1,0,3,2,3]},{"id":"n005","name":"Atendimento a fornecedores","category":"trabalho","weight":0.61,"meta":"fluxo · confiança media","connections":[{"id":"n022","proximity":0.5},{"id":"n032","proximity":0.45}],"act":[3,0,0,1,0,2,0,0,1,0,0,0,0,1]},{"id":"n006","name":"Avaliação de desempenho","category":"trabalho","weight":0.72,"meta":"decisão · confiança media","connections":[{"id":"n022","proximity":0.17},{"id":"n027","proximity":0.45},{"id":"n028","proximity":0.7},{"id":"n030","proximity":0.7}],"act":[0,0,0,0,0,0,0,0,0,0,0,3,0,0]},{"id":"n007","name":"Blog de receitas","category":"projetos","weight":0.82,"meta":"projeto · confiança alta","connections":[{"id":"n018","proximity":0.61},{"id":"n024","proximity":0.65}],"act":[0,3,0,0,0,3,1,4,1,0,2,1,0,3]},{"id":"n008","name":"Certificação em gestão de projetos","category":"estudos","weight":0.91,"meta":"projeto · confiança media","connections":[{"id":"n020","proximity":0.6},{"id":"n022","proximity":0.53},{"id":"n026","proximity":0.74},{"id":"n028","proximity":0.87}],"act":[0,0,0,0,2,0,0,0,0,0,2,3,1,3]},{"id":"n009","name":"Clube do livro","category":"lazer","weight":0.61,"meta":"lazer · confiança media","connections":[{"id":"n015","proximity":0.7},{"id":"n021","proximity":0.65}],"act":[0,2,1,0,3,1,1,0,0,2,0,0,0,0]},{"id":"n010","name":"Consultas de rotina","category":"saude","weight":0.72,"meta":"agenda · confiança media","connections":[{"id":"n027","proximity":0.63},{"id":"n035","proximity":0.81}],"act":[0,0,0,0,3,0,0,0,3,0,0,0,1,1]},{"id":"n011","name":"Corrida pela manhã","category":"saude","weight":0.91,"meta":"rotina · confiança alta","connections":[{"id":"n012","proximity":0.65},{"id":"n016","proximity":0.65},{"id":"n026","proximity":0.45},{"id":"n035","proximity":0.7},{"id":"n037","proximity":0.65}],"act":[0,0,2,0,0,2,0,3,0,0,5,3,1,4]},{"id":"n012","name":"Cuidados com o cachorro","category":"casa","weight":0.91,"meta":"rotina · confiança media","connections":[{"id":"n014","proximity":0.61},{"id":"n017","proximity":0.56},{"id":"n018","proximity":0.45},{"id":"n023","proximity":0.72}],"act":[2,2,2,1,1,0,2,1,0,0,0,0,0,0]},{"id":"n013","name":"Curso de fotografia","category":"estudos","weight":0.72,"meta":"projeto · confiança alta","connections":[{"id":"n015","proximity":0.58},{"id":"n024","proximity":0.7},{"id":"n039","proximity":0.76}],"act":[0,0,0,2,2,4,6,5,1,3,0,0,0,1]},{"id":"n014","name":"Divisão das tarefas de casa","category":"casa","weight":0.72,"meta":"decisão · confiança alta","connections":[{"id":"n023","proximity":0.83},{"id":"n025","proximity":0.45}],"act":[2,5,1,2,0,0,1,1,2,4,0,0,1,0]},{"id":"n015","name":"Festival de cinema","category":"lazer","weight":0.82,"meta":"lazer · confiança media","connections":[{"id":"n016","proximity":0.7},{"id":"n039","proximity":0.6}],"act":[0,0,0,0,0,0,0,0,0,0,0,0,0,3]},{"id":"n016","name":"Futebol de quinta","category":"lazer","weight":0.72,"meta":"lazer · confiança alta","connections":[{"id":"n023","proximity":0.17}],"act":[2,1,1,0,0,0,3,1,3,0,3,0,4,1]},{"id":"n017","name":"Grupo do condomínio","category":"comunicacao","weight":0.72,"meta":"tema · confiança media","connections":[{"id":"n018","proximity":0.17},{"id":"n023","proximity":0.76},{"id":"n029","proximity":0.8}],"act":[0,2,0,1,3,1,0,1,2,1,0,1,2,1]},{"id":"n018","name":"Horta no quintal","category":"projetos","weight":0.82,"meta":"projeto · confiança media","connections":[{"id":"n026","proximity":0.45}],"act":[3,1,0,0,2,1,1,0,0,0,0,2,0,0]},{"id":"n019","name":"Imposto de renda","category":"financas","weight":0.61,"meta":"financeiro · confiança media","connections":[{"id":"n025","proximity":0.7},{"id":"n039","proximity":0.7}],"act":[0,2,1,0,0,1,2,0,1,3,0,0,1,0]},{"id":"n020","name":"Inglês para reuniões","category":"estudos","weight":0.82,"meta":"rotina · confiança alta","connections":[{"id":"n021","proximity":0.5},{"id":"n028","proximity":0.56},{"id":"n034","proximity":0.65}],"act":[0,2,2,2,2,0,3,1,0,0,2,1,3,0]},{"id":"n021","name":"Leitura do mês","category":"estudos","weight":0.72,"meta":"rotina · confiança media","connections":[{"id":"n024","proximity":0.5}],"act":[2,0,0,0,0,0,0,0,0,1,0,1,2,1]},{"id":"n022","name":"Migração do sistema de chamados","category":"trabalho","weight":1.0,"meta":"projeto · confiança alta","connections":[{"id":"n030","proximity":0.69},{"id":"n034","proximity":0.79}],"act":[0,0,0,0,0,2,1,3,4,5,3,1,0,1]},{"id":"n023","name":"Mudança de quarto","category":"casa","weight":0.82,"meta":"projeto · confiança media","connections":[{"id":"n029","proximity":0.83}],"act":[2,0,5,5,4,0,0,0,0,0,0,0,0,0]},{"id":"n024","name":"Oficina de escrita","category":"estudos","weight":0.72,"meta":"tema · confiança media","connections":[],"act":[0,3,1,4,0,0,2,0,0,0,0,1,0,0]},{"id":"n025","name":"Orçamento doméstico","category":"financas","weight":1.0,"meta":"financeiro · confiança media","connections":[{"id":"n031","proximity":0.78},{"id":"n038","proximity":0.8}],"act":[0,2,0,0,1,1,0,0,0,0,0,0,2,0]},{"id":"n026","name":"Painel de metas","category":"projetos","weight":0.91,"meta":"tema · confiança media","connections":[{"id":"n028","proximity":0.75},{"id":"n031","proximity":0.45}],"act":[2,0,0,0,2,0,0,2,4,0,0,0,2,0]},{"id":"n027","name":"Pausas no trabalho","category":"saude","weight":0.82,"meta":"rotina · confiança media","connections":[{"id":"n034","proximity":0.65},{"id":"n035","proximity":0.81}],"act":[0,2,1,1,0,2,1,0,0,0,0,0,1,2]},{"id":"n028","name":"Plano de carreira","category":"trabalho","weight":0.82,"meta":"tema · confiança alta","connections":[],"act":[0,2,0,1,0,0,3,1,0,3,4,1,0,5]},{"id":"n029","name":"Reforma do banheiro","category":"casa","weight":0.72,"meta":"projeto · confiança alta","connections":[{"id":"n031","proximity":0.45}],"act":[2,0,0,0,0,0,0,4,5,3,5,1,0,2]},{"id":"n030","name":"Relatório mensal da equipe","category":"trabalho","weight":0.82,"meta":"projeto · confiança media","connections":[{"id":"n034","proximity":0.81}],"act":[2,0,0,0,1,0,0,0,0,0,0,0,1,0]},{"id":"n031","name":"Reserva de emergência","category":"financas","weight":0.91,"meta":"financeiro · confiança media","connections":[{"id":"n038","proximity":0.61},{"id":"n039","proximity":0.5}],"act":[0,0,0,0,0,0,0,0,0,0,2,0,0,0]},{"id":"n032","name":"Respostas rápidas para clientes","category":"comunicacao","weight":0.72,"meta":"respostas · confiança media","connections":[{"id":"n036","proximity":0.89}],"act":[0,0,2,0,0,1,1,0,2,0,0,0,1,0]},{"id":"n033","name":"Restauração da bicicleta antiga","category":"projetos","weight":0.61,"meta":"projeto · confiança media","connections":[{"id":"n037","proximity":0.45},{"id":"n038","proximity":0.45}],"act":[0,2,0,0,2,3,1,0,0,0,0,0,0,0]},{"id":"n034","name":"Reunião semanal de planejamento","category":"trabalho","weight":0.82,"meta":"rotina · confiança alta","connections":[],"act":[2,2,4,3,3,1,1,0,3,3,0,4,0,2]},{"id":"n035","name":"Rotina de sono","category":"saude","weight":0.82,"meta":"rotina · confiança media","connections":[],"act":[0,2,0,0,1,0,0,0,0,0,1,0,0,0]},{"id":"n036","name":"Tom de voz nos e-mails","category":"comunicacao","weight":0.61,"meta":"voz · confiança media","connections":[],"act":[2,0,0,0,0,0,0,2,2,1,0,0,0,0]},{"id":"n037","name":"Trilhas no fim de semana","category":"lazer","weight":0.72,"meta":"lazer · confiança media","connections":[{"id":"n039","proximity":0.7}],"act":[0,0,0,0,2,1,0,1,2,2,3,0,1,3]},{"id":"n038","name":"Troca do carro","category":"financas","weight":0.72,"meta":"decisão · confiança media","connections":[],"act":[0,0,0,0,0,0,3,5,3,0,0,0,1,0]},{"id":"n039","name":"Viagem de férias","category":"lazer","weight":0.91,"meta":"viagem · confiança media","connections":[],"act":[0,0,0,2,0,2,0,0,0,0,0,0,0,0]}],"source":"Vault de exemplo · 13/07 a 18/10/2026","weeks":["2026-07-13","2026-07-20","2026-07-27","2026-08-03","2026-08-10","2026-08-17","2026-08-24","2026-08-31","2026-09-07","2026-09-14","2026-09-21","2026-09-28","2026-10-05","2026-10-12"],"until":"2026-10-18"};
+
+/* =====================================================================================
+   2. CONFIGURAÇÃO GLOBAL
+   ===================================================================================== */
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CFG = {
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
+  bloom: { strength: 0.8, radius: 0.5, threshold: 0.22 },
+  nodeBaseRadius: 0.55,       // raio mínimo de um nó (peso 0)
+  nodeWeightRadius: 1.05,     // raio extra por peso (peso 1 soma 1.05)
+  edgeThickness: 0.095,       // espessura base do tubo de sinapse
+  photonsPerEdge: [1, 5],     // fótons por aresta (mín, máx), escala com a proximidade
+  dustCount: 1200,            // partículas de poeira suspensa (quads instanciados, 1 draw call)
+  burstPool: 2200,            // pool fixo de partículas do disparo sináptico
+  physics: { anchor: 1.4, spring: 0.25, damping: 0.88, wander: 0.45, maxSpeed: 6 }
+  // anchor: mola de Hooke que prende o neurônio à posição de repouso no lobo
+  // spring: molas fracas entre neurônios ligados (preservam a distância de repouso)
+};
+const UP = new THREE.Vector3(0, 1, 0);
+
+/* =====================================================================================
+   3. GLSL COMPARTILHADO
+   ===================================================================================== */
+
+// Ruído simplex 3D (Ian McEwan, Stefan Gustavson; Ashima Arts, licença MIT).
+const GLSL_SIMPLEX = /* glsl */`
+vec3 mod289(vec3 x){return x - floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x - floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+10.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i  = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                 + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                 + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.5 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+  m = m * m;
+  return 105.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+float fbm(vec3 p){
+  float a = 0.5, s = 0.0;
+  for (int i = 0; i < 4; i++) { s += a * snoise(p); p = p * 2.03 + 11.7; a *= 0.5; }
+  return s;
+}
+`;
+
+/* ---------- 3.1 Nó vivo: displacement por ruído + fresnel + filamentos internos ---------- */
+const NODE_VERT = /* glsl */`
+uniform float uTime;
+uniform float uAmp;     // amplitude do displacement
+uniform float uFreq;    // frequência espacial do ruído
+uniform float uSeed;    // deslocamento do campo de ruído (cada nó pulsa diferente)
+uniform float uPulse;   // 0..1, pulso elétrico (clique ou chegada de disparo)
+uniform float uHover;   // 0..1, foco do mouse
+varying vec3 vNormalV;
+varying vec3 vViewPos;
+varying vec3 vObj;
+varying float vDisp;
+${GLSL_SIMPLEX}
+// deslocamento escalar ao longo da normal, com duas oitavas que se movem em tempos diferentes
+float disp(vec3 n){
+  float t = uTime * 0.45;
+  float d = snoise(n * uFreq + vec3(uSeed, t, t * 0.7)) * 0.68
+          + snoise(n * uFreq * 2.4 - vec3(t * 0.8, uSeed, 0.0)) * 0.26;
+  return d * uAmp * (1.0 + uPulse * 1.4 + uHover * 0.45);
+}
+vec3 displaced(vec3 p){ vec3 n = normalize(p); return n * (1.0 + disp(n)); }
+void main(){
+  vec3 n  = normalize(position);
+  // base tangente para reconstruir a normal da superfície deformada por diferenças finitas
+  vec3 tg = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+  vec3 bt = normalize(cross(n, tg));
+  float e = 0.015;
+  vec3 p0 = displaced(n);
+  vec3 p1 = displaced(n + tg * e);
+  vec3 p2 = displaced(n + bt * e);
+  vec3 nn = normalize(cross(p1 - p0, p2 - p0) + vec3(1e-7));
+  if (dot(nn, n) < 0.0) nn = -nn;
+  vDisp = disp(n);
+  vObj = n;
+  vec4 mv = modelViewMatrix * vec4(p0, 1.0);
+  vViewPos = mv.xyz;
+  vNormalV = normalize(normalMatrix * nn);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const NODE_FRAG = /* glsl */`
+uniform vec3  uColor;
+uniform float uTime;
+uniform float uHover;
+uniform float uPulse;
+uniform float uNeighbor; // 0..1, brilho de vizinho do nó em foco
+uniform float uDim;      // 0..1, esmaecimento para o fundo
+uniform float uSeed;
+uniform float uGain;     // ganho global (grafo denso usa menos para não estourar o bloom)
+varying vec3 vNormalV;
+varying vec3 vViewPos;
+varying vec3 vObj;
+varying float vDisp;
+${GLSL_SIMPLEX}
+void main(){
+  vec3 N = normalize(vNormalV + vec3(1e-6));
+  vec3 V = normalize(-vViewPos + vec3(1e-6));
+  float ndv  = clamp(dot(N, V), 0.0, 1.0);
+  float fres = pow(max(1.0 - ndv, 0.0), 2.4);             // borda luminosa (efeito fresnel)
+  // filamentos internos: ruído "ridged" lembra dendritos dentro da matéria
+  float n = fbm(vObj * 2.6 + vec3(uSeed, uTime * 0.12, uTime * 0.08));
+  float veins = pow(max(1.0 - abs(n), 0.0), 7.0);
+  float flicker = 0.75 + 0.25 * sin(uTime * 1.7 + uSeed * 3.1);
+  // luz-chave suave só para dar volume
+  vec3 L = normalize(vec3(0.45, 0.75, 0.55));
+  float diff = clamp(dot(N, L) * 0.5 + 0.5, 0.0, 1.0);
+
+  float energy = 1.0 + uHover * 0.9 + uNeighbor * 0.55 + uPulse * 2.4;
+  vec3 col = uColor * 0.07                                  // interior profundo
+           + uColor * diff * 0.2
+           + uColor * veins * (0.5 * flicker) * (0.35 + 0.65 * ndv)
+           + uColor * smoothstep(-0.3, 0.6, vDisp * 4.0) * 0.1   // cristas do displacement mais claras
+           + uColor * fres * 1.45
+           + vec3(1.0) * pow(fres, 5.0) * 0.3;
+  col *= energy * uGain;
+  col *= mix(1.0, 0.12, uDim);
+  float alpha = mix(1.0, 0.32, uDim);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/* ---------- 3.2 Sinapse: tubo instanciado cuja curva é avaliada na GPU ----------
+   Cada instância recebe 3 pontos de controle (A, M, B). O vertex shader reproduz
+   exatamente THREE.CatmullRomCurve3(points, false, 'catmullrom', 0.5).getPoint(t):
+   pontos virtuais nas pontas (2A-M e 2B-M) e polinômio cúbico por segmento.
+   Assim o CPU só envia 9 floats por aresta por quadro, sem reconstruir geometria. */
+const EDGE_VERT = /* glsl */`
+attribute vec3 aA;
+attribute vec3 aM;
+attribute vec3 aB;
+attribute vec3 aColA;
+attribute vec3 aColB;
+attribute float aProx;
+attribute float aVis;
+attribute float aSeed;
+uniform float uThickness;
+varying float vT;
+varying vec3  vCol;
+varying float vVis;
+varying float vProx;
+varying float vFacing;
+varying float vSeed;
+
+void crSegment(vec3 p0, vec3 p1, vec3 p2, vec3 p3, float w, out vec3 P, out vec3 T){
+  vec3 t0 = 0.5 * (p2 - p0);
+  vec3 t1 = 0.5 * (p3 - p1);
+  vec3 c2 = -3.0 * p1 + 3.0 * p2 - 2.0 * t0 - t1;
+  vec3 c3 =  2.0 * p1 - 2.0 * p2 + t0 + t1;
+  P = p1 + t0 * w + c2 * w * w + c3 * w * w * w;
+  T = t0 + 2.0 * c2 * w + 3.0 * c3 * w * w;
+}
+void curve(float t, out vec3 P, out vec3 T){
+  float p = t * 2.0;
+  float seg = min(floor(p), 1.0);
+  float w = p - seg;
+  if (seg < 0.5) crSegment(2.0 * aA - aM, aA, aM, aB, w, P, T);
+  else           crSegment(aA, aM, aB, 2.0 * aB - aM, w, P, T);
+}
+void main(){
+  float t = position.x;      // 0..1 ao longo da curva
+  float ang = position.y;    // ângulo ao redor do tubo
+  vec3 P, T;
+  curve(t, P, T);
+  T = normalize(T + vec3(1e-6));
+  vec3 up = abs(T.y) < 0.92 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 N = normalize(cross(T, up));
+  vec3 B = cross(T, N);
+  // espessura variável: mais grossa junto aos nós, afina no meio, engrossa quando ativa
+  float taper = 0.42 + 0.58 * pow(abs(2.0 * t - 1.0), 1.6);
+  float strength = max(aProx, aVis * 0.8);
+  float r = uThickness * (0.3 + strength * 0.95) * taper * (0.5 + aVis * 0.95);
+  vec3 dir = cos(ang) * N + sin(ang) * B;
+  vec4 mv = modelViewMatrix * vec4(P + dir * r, 1.0);
+  vec3 nView = normalize(normalMatrix * dir + vec3(1e-6));
+  vFacing = clamp(abs(dot(nView, normalize(-mv.xyz + vec3(1e-6)))), 0.0, 1.0);
+  vT = t;
+  vCol = mix(aColA, aColB, smoothstep(0.0, 1.0, t));
+  vVis = aVis;
+  vProx = aProx;
+  vSeed = aSeed;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const EDGE_FRAG = /* glsl */`
+uniform float uTime;
+varying float vT;
+varying vec3  vCol;
+varying float vVis;
+varying float vProx;
+varying float vFacing;
+varying float vSeed;
+void main(){
+  float core = pow(clamp(vFacing, 0.0, 1.0), 1.7);   // o eixo do tubo brilha, a borda some: parece linha de luz
+  // faixas elétricas que correm pela sinapse
+  float flow = fract(vT * 3.0 - uTime * (0.3 + vProx * 0.55) + vSeed);
+  float band = smoothstep(0.0, 0.07, flow) * (1.0 - smoothstep(0.07, 0.24, flow));
+  float energy = 0.6 + band * 1.1 * vVis;
+  float strength = max(vProx, vVis * 0.8);
+  float alpha = min(1.0, core * vVis * (0.35 + 0.9 * strength) * energy * 1.25);
+  alpha *= smoothstep(0.0, 0.05, vT) * (1.0 - smoothstep(0.95, 1.0, vT));
+  gl_FragColor = vec4(vCol * (0.55 + 1.7 * core * vVis), alpha);
+}
+`;
+
+/* ---------- 3.3 Partículas luminosas (fótons e disparo) ----------
+   Quads instanciados voltados para a câmera (billboards). Cada instância traz posição,
+   cor, tamanho em mundo e alpha. Evita gl_PointSize e gl_PointCoord, que têm limite de
+   tamanho variável entre GPUs (e quebram em alguns renderizadores por software). */
+const GLOW_QUAD_VERT = /* glsl */`
+attribute vec3 aOffset;     // centro da partícula (mundo)
+attribute vec3 aColor;
+attribute float aSize;      // diâmetro em unidades de mundo
+attribute float aAlpha;
+varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vUv;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(aOffset, 1.0);
+  mv.xy += position.xy * aSize;          // expande o quad no espaço da câmera: sempre de frente
+  vUv = position.xy + 0.5;
+  vColor = aColor;
+  vAlpha = aAlpha;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const GLOW_QUAD_FRAG = /* glsl */`
+varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vUv;
+void main(){
+  vec2 c = vUv - 0.5;
+  float d2 = dot(c, c);
+  if (d2 > 0.25 || vAlpha < 0.002) discard;
+  float core = exp(-d2 * 70.0);
+  float halo = exp(-d2 * 14.0) * 0.45;
+  gl_FragColor = vec4(vColor * (core * 1.8 + halo), (core + halo) * vAlpha);
+}
+`;
+
+/* ---------- 3.4 Poeira suspensa (líquido cefalorraquidiano) ----------
+   Também em quads instanciados. A deriva roda inteira na GPU: o CPU não toca nesses dados. */
+const DUST_VERT = /* glsl */`
+attribute vec3 aOffset;
+attribute float aSeed;
+uniform float uTime;
+varying float vA;
+varying vec2 vUv;
+void main(){
+  vec3 p = aOffset;
+  p += vec3(sin(uTime * 0.07 + aSeed * 6.28), cos(uTime * 0.05 + aSeed * 12.1), sin(uTime * 0.06 + aSeed * 3.7)) * 2.4;
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  float size = 0.07 + fract(aSeed * 91.7) * 0.16;
+  mv.xy += position.xy * size;
+  vUv = position.xy + 0.5;
+  vA = (0.25 + 0.75 * fract(aSeed * 53.3)) * (0.55 + 0.45 * sin(uTime * (0.4 + fract(aSeed * 7.0)) + aSeed * 40.0));
+  vA *= smoothstep(1.5, 6.0, -mv.z);     // grãos colados na lente somem em vez de virar borrão
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const DUST_FRAG = /* glsl */`
+varying float vA;
+varying vec2 vUv;
+void main(){
+  vec2 c = vUv - 0.5;
+  float d2 = dot(c, c);
+  if (d2 > 0.25) discard;
+  float a = exp(-d2 * 16.0);
+  gl_FragColor = vec4(vec3(0.55, 0.64, 0.9) * a, a * vA * 0.42);
+}
+`;
+
+/* ---------- 3.5 Nebulosa de fundo (esfera invertida, muito escura) ---------- */
+const NEBULA_VERT = /* glsl */`
+varying vec3 vDir;
+void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`;
+const NEBULA_FRAG = /* glsl */`
+varying vec3 vDir;
+${GLSL_SIMPLEX}
+void main(){
+  float n1 = fbm(vDir * 2.2);
+  float n2 = fbm(vDir * 4.5 + 3.0);
+  vec3 col = vec3(0.010, 0.012, 0.022);
+  col += vec3(0.026, 0.014, 0.050) * smoothstep(0.05, 0.9, n1);
+  col += vec3(0.006, 0.026, 0.040) * smoothstep(0.2, 0.95, n2);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/* ---------- 3.6 Casca da onda de choque ---------- */
+const SHELL_VERT = /* glsl */`
+varying vec3 vN; varying vec3 vV;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const SHELL_FRAG = /* glsl */`
+uniform vec3 uColor; uniform float uOpacity;
+varying vec3 vN; varying vec3 vV;
+void main(){
+  float f = pow(max(1.0 - abs(dot(normalize(vN + 1e-6), normalize(vV + 1e-6))), 0.0), 3.0);
+  gl_FragColor = vec4(uColor * f * 2.2, f * uOpacity);
+}
+`;
+
+/* =====================================================================================
+   4. UTILITÁRIOS
+   ===================================================================================== */
+// PRNG determinístico (mulberry32): o mesmo seed gera o mesmo layout
+function mulberry32(a){ return function(){ a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const esc = s => String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+const fold = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOutExpo = t => t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+
+// Valida e normaliza o JSON de entrada: cria arestas não dirigidas e listas de adjacência
+function normalizeData(raw){
+  const cats = raw.categories || {};
+  const byId = new Map();
+  const nodes = (raw.nodes || []).map((n, i) => {
+    const node = {
+      id: String(n.id), name: String(n.name ?? n.id), category: String(n.category ?? 'outros'),
+      weight: clamp(Number(n.weight ?? 0.5), 0, 1), idx: i, raw: n,
+      links: [], adj: new Map()
+    };
+    byId.set(node.id, node);
+    return node;
+  });
+  const edgeMap = new Map();
+  for (const n of raw.nodes || []) {
+    for (const c of n.connections || []) {
+      const a = byId.get(String(n.id)), b = byId.get(String(c.id));
+      if (!a || !b || a === b) continue;
+      const key = a.idx < b.idx ? `${a.idx}|${b.idx}` : `${b.idx}|${a.idx}`;
+      const prox = clamp(Number(c.proximity ?? 0.5), 0.1, 1);
+      const prev = edgeMap.get(key);
+      if (!prev || prev.proximity < prox) edgeMap.set(key, { a, b, proximity: prox });
+    }
+  }
+  const edges = [...edgeMap.values()].map((e, i) => ({ ...e, idx: i, latent: e.proximity < LATENT_THRESHOLD }));
+  for (const e of edges) {
+    e.a.links.push({ node: e.b, edge: e, proximity: e.proximity });
+    e.b.links.push({ node: e.a, edge: e, proximity: e.proximity });
+    e.a.adj.set(e.b, e); e.b.adj.set(e.a, e);
+  }
+  for (const n of nodes) n.links.sort((x, y) => y.proximity - x.proximity);
+  return { categories: cats, nodes, edges, byId };
+}
+
+// Cria um conjunto de N partículas como UMA InstancedBufferGeometry (1 draw call).
+// Retorna os Float32Array crus para escrita direta por quadro, sem alocação.
+const quadTemplate = new THREE.PlaneGeometry(1, 1);
+function createGlowQuads(N, material, extra = {}){
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.index = quadTemplate.index;
+  geo.setAttribute('position', quadTemplate.attributes.position);
+  const arrays = {};
+  const def = { aOffset: 3, aColor: 3, aSize: 1, aAlpha: 1, ...extra };
+  for (const [name, size] of Object.entries(def)) {
+    if (!size) continue;
+    const arr = new Float32Array(Math.max(1, N) * size);
+    geo.setAttribute(name, new THREE.InstancedBufferAttribute(arr, size).setUsage(THREE.DynamicDrawUsage));
+    arrays[name] = arr;
+  }
+  geo.instanceCount = N;
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.frustumCulled = false;   // a bounding sphere do quad modelo não cobre as instâncias
+  return { mesh, geo, arrays };
+}
+function markDirty(geo, names){ for (const n of names) geo.attributes[n].needsUpdate = true; }
+
+/* =====================================================================================
+   5. CENA, CÂMERA, RENDERER E PÓS-PROCESSAMENTO
+   ===================================================================================== */
+const container = document.getElementById('scene');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+} catch (err) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw err;
+}
+renderer.setPixelRatio(CFG.pixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x04050a, 1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 1200);
+camera.position.set(-60, 40, 110);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.rotateSpeed = 0.6;
+controls.zoomSpeed = 0.8;
+controls.minDistance = 5;
+controls.maxDistance = 140;
+controls.autoRotate = !REDUCED;
+controls.autoRotateSpeed = 0.32;
+
+// Render target com MSAA (WebGL2) e meia precisão de ponto flutuante: bloom em HDR sem serrilhado.
+// Renderizadores por software (SwiftShader, llvmpipe) geram blocos no bloom com MSAA em half float:
+// nesses casos o MSAA fica desligado.
+const SOFTWARE_GL = (() => {
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    return /swiftshader|llvmpipe|software/i.test(String(name));
+  } catch (e) { return false; }
+})();
+const rt = new THREE.WebGLRenderTarget(window.innerWidth * CFG.pixelRatio, window.innerHeight * CFG.pixelRatio,
+  { type: THREE.HalfFloatType, samples: renderer.capabilities.isWebGL2 && !SOFTWARE_GL ? 4 : 0 });
+const composer = new EffectComposer(renderer, rt);
+composer.setPixelRatio(CFG.pixelRatio);
+composer.setSize(window.innerWidth, window.innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight),
+  CFG.bloom.strength, CFG.bloom.radius, CFG.bloom.threshold);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());   // aplica tone mapping e conversão para sRGB
+
+/* ---------- 5.1 Ambiente persistente (não depende do grafo) ---------- */
+// Nebulosa
+const nebula = new THREE.Mesh(
+  new THREE.SphereGeometry(500, 48, 32),
+  new THREE.ShaderMaterial({ vertexShader: NEBULA_VERT, fragmentShader: NEBULA_FRAG, side: THREE.BackSide, depthWrite: false })
+);
+scene.add(nebula);
+
+// Poeira suspensa (quads instanciados, deriva na GPU)
+const dust = (() => {
+  const rnd = mulberry32(7);
+  const n = CFG.dustCount;
+  const m = new THREE.ShaderMaterial({
+    vertexShader: DUST_VERT, fragmentShader: DUST_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 } }
+  });
+  const q = createGlowQuads(n, m, { aOffset: 3, aSeed: 1, aColor: 0, aSize: 0, aAlpha: 0 });
+  const pos = q.arrays.aOffset, seed = q.arrays.aSeed;
+  for (let i = 0; i < n; i++) {
+    // distribuição em casca esférica larga, mais densa perto do grafo
+    const r = 8 + Math.pow(rnd(), 0.6) * 110;
+    const th = rnd() * Math.PI * 2, ph = Math.acos(2 * rnd() - 1);
+    pos[i * 3] = r * Math.sin(ph) * Math.cos(th);
+    pos[i * 3 + 1] = r * Math.cos(ph) * 0.7;
+    pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+    seed[i] = rnd();
+  }
+  q.mesh.renderOrder = 0;
+  scene.add(q.mesh);
+  return q;
+})();
+
+// Material de partículas luminosas compartilhado entre fótons e disparo (1 programa de shader)
+const glowMaterial = new THREE.ShaderMaterial({
+  vertexShader: GLOW_QUAD_VERT, fragmentShader: GLOW_QUAD_FRAG,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+});
+
+// Pool do disparo sináptico: alocado uma vez, reaproveitado a cada clique (sem lixo para o GC)
+const burst = (() => {
+  const N = CFG.burstPool;
+  const q = createGlowQuads(N, glowMaterial);
+  q.mesh.renderOrder = 5;
+  scene.add(q.mesh);
+  return {
+    N, q, pos: q.arrays.aOffset, col: q.arrays.aColor, size: q.arrays.aSize, alpha: q.arrays.aAlpha, cursor: 0,
+    kind: new Uint8Array(N),          // 0 livre, 1 viaja pela sinapse, 2 onda radial
+    edge: new Int32Array(N), fwd: new Int8Array(N), origin: new Int32Array(N),
+    life: new Float32Array(N), dur: new Float32Array(N), base: new Float32Array(N),
+    jit: new Float32Array(N * 3), rdir: new Float32Array(N * 3),
+    c0: new Float32Array(N * 3), c1: new Float32Array(N * 3)
+  };
+})();
+
+// Casca da onda de choque (uma, reaproveitada)
+const shell = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(1, 5),
+  new THREE.ShaderMaterial({ vertexShader: SHELL_VERT, fragmentShader: SHELL_FRAG, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, uniforms: { uColor: { value: new THREE.Color() }, uOpacity: { value: 0 } } })
+);
+shell.visible = false;
+shell.renderOrder = 6;
+scene.add(shell);
+
+// Textura do halo (gradiente radial gerado em canvas, criada uma vez)
+const haloTexture = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.18, 'rgba(255,255,255,.55)');
+  grd.addColorStop(0.5, 'rgba(255,255,255,.12)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+
+/* =====================================================================================
+   5.2 CÉREBRO ANATÔMICO
+   -------------------------------------------------------------------------------------
+   Forma procedural em "unidades de cérebro" (comprimento ~1.84, largura ~1.42), escalada
+   por BRAIN.S. Camadas:
+     a) córtex: dois hemisférios com giros e sulcos (ruído simplex "ridged" calculado uma
+        vez na CPU), fissura longitudinal, lobo temporal saliente, base achatada;
+        cerebelo com folhas horizontais; tronco cerebral. Material de vidro translúcido
+        com fresnel, sulcos escuros e ativação regional (estilo ressonância funcional).
+     b) pontos de luz sobre os giros (≈13 mil quads instanciados, 1 draw call).
+     c) rede neural interna: ≈2.400 neurônios no volume, ligados aos vizinhos mais próximos
+        por fibras (LineSegments, 1 draw call) com pulsos que correm em cada fibra.
+   ===================================================================================== */
+const BRAIN = {
+  S: 24,                                   // escala: 1 unidade de cérebro = 24 unidades de mundo
+  hemiX: 0.31,                             // deslocamento lateral do centro de cada hemisfério
+  R: [0.40, 0.50, 0.92],                   // raios do elipsoide base do hemisfério (x, y, z)
+  core: { c: [0, -0.07, 0.02], r: [0.24, 0.19, 0.55] },     // corpo caloso, tálamo, sistema límbico
+  cereb: { c: [0, -0.36, -0.60], r: [0.46, 0.19, 0.28] },   // cerebelo
+  stem: { c: [0, -0.60, -0.30], r: [0.10, 0.27, 0.11] }     // tronco cerebral
+};
+const BRAIN_CENTER = new THREE.Vector3(0, -0.04 * BRAIN.S, 0);
+// intensidade de repouso das camadas de fundo (as sinapses dos seus temas ficam por cima)
+const BRAIN_REST = { shell: 1, neurons: 0.75, net: 0.6 };
+
+// Mapa de regiões. Cada categoria do JSON escolhe um lobo pelo campo "lobe" (ou recebe um na ordem).
+const LOBES = {
+  frontalE:  { label: 'lobo frontal esquerdo',  c: [-0.30,  0.12,  0.56], r: 0.30 },
+  frontalD:  { label: 'lobo frontal direito',   c: [ 0.30,  0.12,  0.56], r: 0.30 },
+  parietalE: { label: 'lobo parietal esquerdo', c: [-0.28,  0.28, -0.20], r: 0.28 },
+  parietalD: { label: 'lobo parietal direito',  c: [ 0.28,  0.28, -0.20], r: 0.28 },
+  temporalE: { label: 'lobo temporal esquerdo', c: [-0.45, -0.20,  0.14], r: 0.24 },
+  temporalD: { label: 'lobo temporal direito',  c: [ 0.45, -0.20,  0.14], r: 0.24 },
+  limbico:   { label: 'sistema límbico',        c: [ 0.00, -0.08,  0.05], r: 0.24 },
+  posterior: { label: 'occipital e cerebelo',   c: [ 0.00, -0.26, -0.60], r: 0.34 }
+};
+const LOBE_ORDER = ['frontalE', 'frontalD', 'parietalE', 'parietalD', 'temporalE', 'temporalD', 'limbico', 'posterior'];
+
+// Ruído simplex 3D em JS (Stefan Gustavson, domínio público), usado só na construção.
+const noise3 = (() => {
+  const g3 = [1,1,0,-1,1,0,1,-1,0,-1,-1,0,1,0,1,-1,0,1,1,0,-1,-1,0,-1,0,1,1,0,-1,1,0,1,-1,0,-1,-1];
+  const p = new Uint8Array(256), rnd = mulberry32(1337);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = p[i]; p[i] = p[j]; p[j] = t; }
+  const perm = new Uint8Array(512), pm = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) { perm[i] = p[i & 255]; pm[i] = perm[i] % 12; }
+  const F3 = 1 / 3, G3 = 1 / 6;
+  const c = (gi, x, y, z) => { let t = 0.6 - x * x - y * y - z * z; if (t < 0) return 0; t *= t; return t * t * (g3[gi] * x + g3[gi + 1] * y + g3[gi + 2] * z); };
+  return (x, y, z) => {
+    const s = (x + y + z) * F3, i = Math.floor(x + s), j = Math.floor(y + s), k = Math.floor(z + s);
+    const t = (i + j + k) * G3, x0 = x - i + t, y0 = y - j + t, z0 = z - k + t;
+    let i1, j1, k1, i2, j2, k2;
+    if (x0 >= y0) { if (y0 >= z0) { i1=1;j1=0;k1=0;i2=1;j2=1;k2=0; } else if (x0 >= z0) { i1=1;j1=0;k1=0;i2=1;j2=0;k2=1; } else { i1=0;j1=0;k1=1;i2=1;j2=0;k2=1; } }
+    else { if (y0 < z0) { i1=0;j1=0;k1=1;i2=0;j2=1;k2=1; } else if (x0 < z0) { i1=0;j1=1;k1=0;i2=0;j2=1;k2=1; } else { i1=0;j1=1;k1=0;i2=1;j2=1;k2=0; } }
+    const ii = i & 255, jj = j & 255, kk = k & 255;
+    return 32 * (c(pm[ii + perm[jj + perm[kk]]] * 3, x0, y0, z0)
+      + c(pm[ii + i1 + perm[jj + j1 + perm[kk + k1]]] * 3, x0 - i1 + G3, y0 - j1 + G3, z0 - k1 + G3)
+      + c(pm[ii + i2 + perm[jj + j2 + perm[kk + k2]]] * 3, x0 - i2 + 2 * G3, y0 - j2 + 2 * G3, z0 - k2 + 2 * G3)
+      + c(pm[ii + 1 + perm[jj + 1 + perm[kk + 1]]] * 3, x0 - 1 + 3 * G3, y0 - 1 + 3 * G3, z0 - 1 + 3 * G3));
+  };
+})();
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+// Forma de um hemisfério: direção unitária (x,y,z) -> ponto em unidades de cérebro, sem os giros.
+function hemiShape(x, y, z, side){
+  const [rx, ry, rz] = BRAIN.R;
+  let px = x * rx, py = y * ry, pz = z * rz;
+  const front = sstep(0, 1, z), back = sstep(0, 1, -z);
+  px *= 1 - 0.14 * front;                       // frontal mais estreito
+  py *= 1 - 0.12 * front + 0.05 * back;         // occipital mais cheio
+  const med = sstep(0, 0.6, -x * side);         // lado voltado para a linha média
+  px *= 1 - 0.36 * med;                         // parede medial achatada: fissura longitudinal
+  if (py < 0) py *= 0.78;                       // base achatada
+  const tl = Math.exp(-((z - 0.12) ** 2) / 0.12) * sstep(0, -0.7, y) * sstep(0, 0.5, x * side);
+  px += side * 0.05 * tl; py -= 0.12 * tl;      // lobo temporal saliente para baixo e para fora
+  return { x: side * BRAIN.hemiX + px, y: 0.03 + py, z: pz, med };
+}
+
+// Teste de pertinência ao volume (aproximado, sem os giros), em unidades de cérebro.
+function insideBrain(x, y, z, shrink = 0.9){
+  for (const side of [-1, 1]) {
+    const dx = x - side * BRAIN.hemiX, front = sstep(0, 1, z / BRAIN.R[2]);
+    const medial = dx * side < 0;
+    const rx = BRAIN.R[0] * (medial ? 0.66 : 1) * (1 - 0.14 * front);
+    const ry = BRAIN.R[1] * (y < 0.03 ? 0.78 : 1) * (1 - 0.12 * front);
+    if ((dx / rx) ** 2 + ((y - 0.03) / ry) ** 2 + (z / BRAIN.R[2]) ** 2 < shrink) return true;
+  }
+  const inE = (o, q) => ((x - o.c[0]) / o.r[0]) ** 2 + ((y - o.c[1]) / o.r[1]) ** 2 + ((z - o.c[2]) / o.r[2]) ** 2 < q;
+  return inE(BRAIN.core, shrink) || inE(BRAIN.cereb, shrink);
+}
+
+// Giros e sulcos: sulcos estreitos e sinuosos onde o ruído cruza zero, giros largos no resto.
+function gyri(x, y, z){
+  const w = noise3(x * 1.8 + 5.1, y * 1.8, z * 1.8) * 0.35;
+  const n1 = Math.abs(noise3(x * 6.2 + w, y * 6.2 - w, z * 6.2));
+  const n2 = Math.abs(noise3(x * 12.5 + 11, y * 12.5 + w, z * 12.5));
+  const sulc = Math.pow(1 - n1, 7) * 0.8 + Math.pow(1 - n2, 9) * 0.35;   // 1 no fundo do sulco
+  return clamp(1 - sulc, 0, 1);                                          // 1 no giro, 0 no sulco
+}
+
+const BRAIN_VERT = /* glsl */`
+attribute float aRidge;
+varying vec3 vN; varying vec3 vV; varying float vRidge; varying vec3 vW;
+void main(){
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vW = w.xyz;
+  vec4 mv = viewMatrix * w;
+  vN = normalize(normalMatrix * normal);
+  vV = normalize(-mv.xyz);
+  vRidge = aRidge;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const BRAIN_FRAG = /* glsl */`
+uniform vec3 uColA; uniform vec3 uColB; uniform vec3 uAct; uniform vec3 uActColor;
+uniform float uShell; uniform float uActStr; uniform float uActR; uniform float uTime; uniform float uS;
+uniform vec3 uLobeC[8]; uniform vec3 uLobeCol[8]; uniform float uLobeR[8]; uniform float uLobeStr[8];
+varying vec3 vN; varying vec3 vV; varying float vRidge; varying vec3 vW;
+void main(){
+  vec3 N = normalize(vN + vec3(1e-6));
+  float ndv = clamp(abs(dot(N, normalize(vV + vec3(1e-6)))), 0.0, 1.0);
+  float fres = pow(max(1.0 - ndv, 0.0), 2.0);
+  float h = clamp(vW.y / uS * 1.3 + 0.55, 0.0, 1.0);
+  vec3 base = mix(uColA, uColB, h);
+  // onda lenta de atividade que percorre o córtex de trás para a frente
+  float wave = 0.5 + 0.5 * sin(vW.z / uS * 8.0 - uTime * 0.7 + vW.x / uS * 2.5);
+  vec3 col = base * (0.12 + vRidge * 0.5 + fres * 1.0 + wave * 0.12 * vRidge);
+  float a = (0.010 + vRidge * 0.026 + fres * 0.20) * (gl_FrontFacing ? 1.0 : 0.3);
+  // ativação regional: a área do campo ativo acende no córtex
+  float d = distance(vW, uAct) / max(uActR, 0.001);
+  float act = exp(-d * d) * uActStr;
+  col += uActColor * act * (1.2 + vRidge * 1.3);
+  a += act * 0.30;
+  // calor de cada lobo na semana escolhida (mapa de atividade sobre o córtex)
+  for (int i = 0; i < 8; i++) {
+    float dl = distance(vW, uLobeC[i]) / max(uLobeR[i], 0.001);
+    float k = exp(-dl * dl) * uLobeStr[i];
+    col += uLobeCol[i] * k * (0.5 + vRidge * 0.9);
+    a += k * 0.12;
+  }
+  gl_FragColor = vec4(col, a * uShell);
+}
+`;
+const NEURON_VERT = /* glsl */`
+attribute vec3 aOffset; attribute vec3 aColor; attribute float aSize; attribute float aAlpha; attribute float aSeed;
+uniform float uTime; uniform float uDim;
+varying vec3 vColor; varying float vAlpha; varying vec2 vUv;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(aOffset, 1.0);
+  float tw = 0.55 + 0.45 * sin(uTime * (0.5 + fract(aSeed * 7.13) * 1.6) + aSeed * 40.0);
+  float flash = pow(max(0.0, sin(uTime * 0.31 + aSeed * 91.0)), 60.0);   // disparo esporádico
+  mv.xy += position.xy * aSize * (1.0 + flash * 1.8);
+  vUv = position.xy + 0.5;
+  vColor = aColor * (1.0 + flash * 2.5);
+  vAlpha = aAlpha * tw * uDim;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+const NET_VERT = /* glsl */`
+attribute float aT; attribute float aSeed; attribute vec3 aColor;
+varying float vT; varying float vSeed; varying vec3 vColor;
+void main(){ vT = aT; vSeed = aSeed; vColor = aColor; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`;
+const NET_FRAG = /* glsl */`
+uniform float uTime; uniform float uDim;
+varying float vT; varying float vSeed; varying vec3 vColor;
+void main(){
+  float speed = 0.25 + fract(vSeed * 3.7) * 0.5;
+  float dir = fract(vSeed * 13.1) < 0.5 ? 1.0 : -1.0;
+  float f = fract(vT * dir * 0.5 - uTime * speed + vSeed);
+  float pulse = smoothstep(0.0, 0.04, f) * (1.0 - smoothstep(0.04, 0.14, f));
+  float a = (0.06 + pulse * 0.85) * uDim;
+  gl_FragColor = vec4(vColor * (0.55 + pulse * 2.4), a);
+}
+`;
+
+function buildBrain(){
+  const S = BRAIN.S, group = new THREE.Group(), disposables = [];
+  const shellMat = new THREE.ShaderMaterial({
+    vertexShader: BRAIN_VERT, fragmentShader: BRAIN_FRAG, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    uniforms: {
+      uColA: { value: new THREE.Color('#2b1f78') }, uColB: { value: new THREE.Color('#3f93e0') },
+      uAct: { value: new THREE.Vector3(0, 0, 0) }, uActColor: { value: new THREE.Color('#ffffff') },
+      uShell: { value: 1 }, uActStr: { value: 0 }, uActR: { value: 0.35 * S }, uTime: { value: 0 }, uS: { value: S },
+      uLobeC: { value: LOBE_ORDER.map(k => new THREE.Vector3(...LOBES[k].c).multiplyScalar(S)) },
+      uLobeR: { value: LOBE_ORDER.map(k => LOBES[k].r * S * 1.3) },
+      uLobeCol: { value: LOBE_ORDER.map(() => new THREE.Color(0, 0, 0)) },
+      uLobeStr: { value: LOBE_ORDER.map(() => 0) }
+    }
+  });
+  disposables.push(shellMat);
+  const surface = [];   // pontos candidatos para a nuvem de luz: [x, y, z, ridge]
+
+  // a) hemisférios
+  for (const side of [-1, 1]) {
+    const geo = new THREE.SphereGeometry(1, 220, 160);
+    const pos = geo.attributes.position, ridge = new Float32Array(pos.count);
+    for (let i = 0; i < pos.count; i++) {
+      const h = hemiShape(pos.getX(i), pos.getY(i), pos.getZ(i), side);
+      const r = gyri(h.x, h.y, h.z);
+      // normal aproximada do elipsoide, para empurrar giros para fora e sulcos para dentro
+      const nx = (h.x - side * BRAIN.hemiX) / (BRAIN.R[0] ** 2), ny = (h.y - 0.03) / (BRAIN.R[1] ** 2), nz = h.z / (BRAIN.R[2] ** 2);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      const depth = (r - 0.72) * 0.05 * (1 - 0.65 * h.med);
+      pos.setXYZ(i, (h.x + nx / nl * depth) * S, (h.y + ny / nl * depth) * S, (h.z + nz / nl * depth) * S);
+      ridge[i] = r * (1 - 0.5 * h.med) + 0.25 * h.med;
+      if (r > 0.82 && h.med < 0.3) surface.push(pos.getX(i), pos.getY(i), pos.getZ(i), r);
+    }
+    geo.setAttribute('aRidge', new THREE.BufferAttribute(ridge, 1));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, shellMat); m.renderOrder = 0;
+    group.add(m); disposables.push(geo);
+  }
+  // cerebelo (folhas horizontais) e tronco
+  {
+    const geo = new THREE.SphereGeometry(1, 160, 110);
+    const pos = geo.attributes.position, ridge = new Float32Array(pos.count);
+    const { c, r } = BRAIN.cereb;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const notch = 1 - 0.18 * Math.exp(-(x * x) / 0.02) * sstep(0, 1, z + 0.2);   // vale do verme
+      const fol = Math.sin((y * 34 + noise3(x * 3, y * 3, z * 3) * 1.6));
+      const d = 1 + 0.035 * fol;
+      const px = c[0] + x * r[0] * d, py = c[1] + y * r[1] * d * notch, pz = c[2] + z * r[2] * d * notch;
+      pos.setXYZ(i, px * S, py * S, pz * S);
+      ridge[i] = 0.5 + 0.5 * fol;
+      if (fol > 0.6 && i % 3 === 0) surface.push(px * S, py * S, pz * S, 0.6 + 0.4 * fol);
+    }
+    geo.setAttribute('aRidge', new THREE.BufferAttribute(ridge, 1));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, shellMat); group.add(m); disposables.push(geo);
+  }
+  {
+    const geo = new THREE.SphereGeometry(1, 48, 40);
+    const pos = geo.attributes.position, ridge = new Float32Array(pos.count).fill(0.55);
+    const { c, r } = BRAIN.stem;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const py = c[1] + y * r[1], pz = c[2] + z * r[2] - (y + 1) * 0.06;   // leve inclinação para trás
+      pos.setXYZ(i, (c[0] + x * r[0]) * S, py * S, pz * S);
+    }
+    geo.setAttribute('aRidge', new THREE.BufferAttribute(ridge, 1));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, shellMat); group.add(m); disposables.push(geo);
+  }
+
+  // b) pontos de luz sobre os giros
+  const rnd = mulberry32(42);
+  const neuronMat = new THREE.ShaderMaterial({
+    vertexShader: NEURON_VERT, fragmentShader: GLOW_QUAD_FRAG, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, uniforms: { uTime: { value: 0 }, uDim: { value: BRAIN_REST.neurons } }
+  });
+  disposables.push(neuronMat);
+  const cA = new THREE.Color('#6b5cff'), cB = new THREE.Color('#7fe3ff'), cTmp = new THREE.Color();
+  const nSurf = Math.min(13000, surface.length / 4);
+  const sq = createGlowQuads(nSurf, neuronMat, { aSeed: 1 });
+  for (let k = 0; k < nSurf; k++) {
+    const i = Math.floor(rnd() * (surface.length / 4)) * 4;
+    sq.arrays.aOffset.set([surface[i], surface[i + 1], surface[i + 2]], k * 3);
+    cTmp.copy(cA).lerp(cB, clamp(surface[i + 1] / S * 1.3 + 0.55, 0, 1));
+    sq.arrays.aColor.set([cTmp.r, cTmp.g, cTmp.b], k * 3);
+    sq.arrays.aSize[k] = 0.08 + rnd() * 0.11;
+    sq.arrays.aAlpha[k] = 0.16 + 0.3 * surface[i + 3] * rnd();
+    sq.arrays.aSeed[k] = rnd();
+  }
+  sq.mesh.renderOrder = 1; group.add(sq.mesh); disposables.push(sq.geo);
+
+  // c) rede neural interna
+  const NN = 2400, pts = [];
+  let guard = 0;
+  while (pts.length < NN * 3 && guard++ < 200000) {
+    const x = (rnd() * 2 - 1) * 0.75, y = (rnd() * 2 - 1) * 0.6 - 0.05, z = (rnd() * 2 - 1) * 0.95;
+    if (insideBrain(x, y, z, 0.86)) pts.push(x, y, z);
+  }
+  const n = pts.length / 3, cell = 0.12, grid = new Map();
+  const key = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  for (let i = 0; i < n; i++) { const k = key(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(i); }
+  const seg = [], segSeen = new Set();
+  for (let i = 0; i < n; i++) {
+    const x = pts[i * 3], y = pts[i * 3 + 1], z = pts[i * 3 + 2];
+    const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell), cand = [];
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+      const l = grid.get(`${cx + a},${cy + b},${cz + c}`); if (!l) continue;
+      for (const j of l) if (j !== i) { const d = Math.hypot(pts[j * 3] - x, pts[j * 3 + 1] - y, pts[j * 3 + 2] - z); if (d < 0.13) cand.push([d, j]); }
+    }
+    cand.sort((p, q) => p[0] - q[0]);
+    for (const [, j] of cand.slice(0, 3)) { const kk = i < j ? i * 100000 + j : j * 100000 + i; if (!segSeen.has(kk)) { segSeen.add(kk); seg.push(i, j); } }
+  }
+  const M = seg.length / 2;
+  const lp = new Float32Array(M * 6), lt = new Float32Array(M * 2), ls = new Float32Array(M * 2), lc = new Float32Array(M * 6);
+  for (let s = 0; s < M; s++) {
+    const sd = rnd();
+    for (let e = 0; e < 2; e++) {
+      const i = seg[s * 2 + e];
+      lp.set([pts[i * 3] * S, pts[i * 3 + 1] * S, pts[i * 3 + 2] * S], (s * 2 + e) * 3);
+      lt[s * 2 + e] = e; ls[s * 2 + e] = sd;
+      cTmp.copy(cA).lerp(cB, clamp(pts[i * 3 + 1] * 1.3 + 0.55, 0, 1));
+      lc.set([cTmp.r, cTmp.g, cTmp.b], (s * 2 + e) * 3);
+    }
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(lp, 3));
+  lineGeo.setAttribute('aT', new THREE.BufferAttribute(lt, 1));
+  lineGeo.setAttribute('aSeed', new THREE.BufferAttribute(ls, 1));
+  lineGeo.setAttribute('aColor', new THREE.BufferAttribute(lc, 3));
+  const netMat = new THREE.ShaderMaterial({ vertexShader: NET_VERT, fragmentShader: NET_FRAG, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, uniforms: { uTime: { value: 0 }, uDim: { value: BRAIN_REST.net } } });
+  const net = new THREE.LineSegments(lineGeo, netMat); net.renderOrder = 1; net.frustumCulled = false;
+  group.add(net); disposables.push(lineGeo, netMat);
+  // corpos dos neurônios internos
+  const nq = createGlowQuads(n, neuronMat, { aSeed: 1 });
+  for (let i = 0; i < n; i++) {
+    nq.arrays.aOffset.set([pts[i * 3] * S, pts[i * 3 + 1] * S, pts[i * 3 + 2] * S], i * 3);
+    cTmp.copy(cA).lerp(cB, clamp(pts[i * 3 + 1] * 1.3 + 0.55, 0, 1));
+    nq.arrays.aColor.set([cTmp.r * 1.4, cTmp.g * 1.4, cTmp.b * 1.4], i * 3);
+    nq.arrays.aSize[i] = 0.16 + rnd() * 0.2; nq.arrays.aAlpha[i] = 0.5 + rnd() * 0.4; nq.arrays.aSeed[i] = rnd();
+  }
+  nq.mesh.renderOrder = 1; group.add(nq.mesh); disposables.push(nq.geo);
+
+  scene.add(group);
+  return {
+    group, shellMat, neuronMat, netMat, stats: { surfacePoints: nSurf, neurons: n, fibers: M },
+    lobeTarget: LOBE_ORDER.map(() => 0),
+    update(time, dt = 1 / 60){
+      shellMat.uniforms.uTime.value = time; neuronMat.uniforms.uTime.value = time; netMat.uniforms.uTime.value = time;
+      const s = shellMat.uniforms.uLobeStr.value, k = Math.min(1, dt * 2.2);
+      for (let i = 0; i < s.length; i++) s[i] += (this.lobeTarget[i] - s[i]) * k;
+    },
+    dispose(){ scene.remove(group); disposables.forEach(d => d.dispose()); }
+  };
+}
+const brain = buildBrain();
+
+// Sorteia posições de repouso dos nós dentro do lobo da categoria, com espaçamento mínimo.
+function placeNodesInLobes(g, rnd){
+  const cats = [...new Set(g.nodes.map(n => n.category))];
+  const lobeOf = {};
+  cats.forEach((k, i) => { const want = g.categories[k] && g.categories[k].lobe; lobeOf[k] = LOBES[want] ? want : LOBE_ORDER[i % LOBE_ORDER.length]; });
+  const placed = [], S = BRAIN.S;
+  for (const k of cats) {
+    const L = LOBES[lobeOf[k]];
+    const members = g.nodes.filter(n => n.category === k).sort((a, b) => b.weight - a.weight);
+    for (const n of members) {
+      n.lobe = lobeOf[k]; n.lobeLabel = L.label;
+      let best = null, gap = 0.9;
+      for (let t = 0; t < 900 && !best; t++) {
+        if (t && t % 150 === 0) gap *= 0.7;                 // relaxa o espaçamento se o lobo lotar
+        const u = rnd() * 2 - 1, v = rnd() * 2 - 1, w = rnd() * 2 - 1;
+        if (u * u + v * v + w * w > 1) continue;
+        const spread = L.r * (0.35 + 0.65 * (1 - n.weight * 0.45));
+        const x = L.c[0] + u * spread, y = L.c[1] + v * spread * 0.85, z = L.c[2] + w * spread;
+        if (!insideBrain(x, y, z, 0.78)) continue;
+        const p = new THREE.Vector3(x * S, y * S, z * S);
+        if (placed.every(q => q.p.distanceTo(p) > q.r + n.radius + gap)) best = p;
+      }
+      if (!best) { best = new THREE.Vector3(L.c[0] * S, L.c[1] * S, L.c[2] * S).add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(2)); }
+      n.rest = best; n.pos = best.clone();
+      placed.push({ p: best, r: n.radius });
+    }
+  }
+  g.lobeOf = lobeOf;
+}
+
+// Geometria de nó compartilhada (indexada: o vertex shader roda uma vez por vértice)
+const nodeGeometry = new THREE.SphereGeometry(1, 72, 48);
+// LOD: nós leves usam malha mais simples (o displacement é sutil, a diferença não aparece)
+const nodeGeometryLo = new THREE.SphereGeometry(1, 40, 28);
+
+/* =====================================================================================
+   6. ESTADO
+   ===================================================================================== */
+const state = {
+  graph: null,          // { nodes, edges, categories, byId, edgeMesh, photons, labels, ... }
+  hovered: null,
+  selected: null,
+  category: null,
+  labelsAll: false,
+  flying: false,
+  flight: null,
+  seed: 20261020,
+  overviewDist: 52,
+  pointerNDC: new THREE.Vector2(9, 9),
+  pointerDirty: false,
+  pointerInside: false,
+  delayed: []           // gsap.delayedCall pendentes (cancelados no rebuild)
+};
+
+/* =====================================================================================
+   7. CONSTRUÇÃO DO GRAFO
+   ===================================================================================== */
+// raio do neurônio: cresce com o calor (atividade recente); nunca some
+function radiusFor(n, g){ return (CFG.nodeBaseRadius * 0.75 + (0.2 + n.heat) * CFG.nodeWeightRadius * 0.85) * g.nodeScale; }
+
+function buildGraph(raw, seed = state.seed){
+  const g = normalizeData(raw);
+  const rnd = mulberry32(seed);
+  const catColor = key => new THREE.Color((g.categories[key] && g.categories[key].color) || '#cfd6ff');
+
+  /* ---- 7.0 escalas que dependem do tamanho do grafo ---- */
+  const E0 = g.edges.length;
+  g.dense = E0 > 300;
+  g.visScale = clamp(Math.sqrt(110 / Math.max(1, E0)), 0.72, 1);   // grafo denso: sinapses um pouco mais discretas, mas visíveis
+  g.nodeScale = g.dense ? 0.52 : 0.8;                              // neurônios menores quando há muitos por lobo
+
+  /* ---- 7.0b calor: atividade registrada por semana, com meia-vida de 3 semanas ----
+     O tamanho e o brilho de cada neurônio medem o calor na semana escolhida na linha do tempo.
+     Sem dados semanais (exemplo), o calor é o peso do JSON. */
+  g.weeks = Array.isArray(raw.weeks) && raw.weeks.length ? raw.weeks : null;
+  g.until = raw.until || null;
+  const NW = g.weeks ? g.weeks.length : 1, DECAY = Math.pow(0.5, 1 / 3);
+  let maxRaw = 0;
+  for (const n of g.nodes) {
+    n.heatRaw = new Float32Array(NW);
+    const a = g.weeks && Array.isArray(n.raw.act) ? n.raw.act : null;
+    if (a) { let acc = 0; for (let w = 0; w < NW; w++) { acc = acc * DECAY + (a[w] || 0); n.heatRaw[w] = acc; if (acc > maxRaw) maxRaw = acc; } }
+  }
+  g.heatAt = (n, w) => g.weeks ? Math.sqrt(n.heatRaw[w] / (maxRaw || 1)) : n.weight;
+  g.weekTotals = g.weeks ? g.weeks.map((_, w) => g.nodes.reduce((t, n) => t + ((n.raw.act || [])[w] || 0), 0)) : [];
+  state.week = g.weeks ? NW - 1 : 0;
+  for (const n of g.nodes) { n.heatT = g.heatAt(n, state.week); n.heat = n.heatT; }
+
+  /* ---- 7.1 nós ---- */
+  const group = new THREE.Group();
+  scene.add(group);
+  for (const n of g.nodes) {
+    n.color = catColor(n.category);
+    n.hex = (g.categories[n.category] && g.categories[n.category].color) || '#cfd6ff';
+    n.radius = radiusFor(n, g);
+    // rótulo curto: nomes longos são truncados na cena e aparecem inteiros no painel
+    n.short = n.name.length > 28 ? n.name.slice(0, 27).trimEnd() + '…' : n.name;
+    n.mass = 0.6 + n.weight * 1.4;
+    n.pos = new THREE.Vector3();          // definida em placeNodesInLobes, depois do laço
+    n.vel = new THREE.Vector3();
+    n.acc = new THREE.Vector3();
+    n.phase = [rnd() * 100, rnd() * 100, rnd() * 100];
+    n.s = 0;              // escala animada (entrada, hover)
+    n.halo = 0.1;         // opacidade animada do halo
+    n.haloScale = g.dense ? 0.55 : 1;
+    n.material = new THREE.ShaderMaterial({
+      vertexShader: NODE_VERT, fragmentShader: NODE_FRAG, transparent: true,
+      uniforms: {
+        uTime: { value: 0 }, uColor: { value: n.color.clone() }, uAmp: { value: 0.07 + (1 - n.weight) * 0.04 },
+        uFreq: { value: 1.6 + rnd() * 0.8 }, uSeed: { value: rnd() * 50 }, uPulse: { value: 0 },
+        uHover: { value: 0 }, uNeighbor: { value: 0 }, uDim: { value: 0 },
+        // cores muito claras (quase brancas) estouram no bloom: o ganho cai com a luminância
+        uGain: { value: 1 }
+      }
+    });
+    // cores muito claras (quase brancas) estouram no bloom: o ganho base cai com a luminância
+    n.gain0 = (g.dense ? 0.72 : 1) * clamp(0.5 / Math.max(0.01, 0.2126 * n.color.r + 0.7152 * n.color.g + 0.0722 * n.color.b), 0.55, 1);
+    n.mesh = new THREE.Mesh(n.weight >= 0.6 ? nodeGeometry : nodeGeometryLo, n.material);
+    n.mesh.renderOrder = 1;
+    n.mesh.userData.node = n;
+    n.sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color: n.color, transparent: true, opacity: n.halo, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    n.sprite.renderOrder = 4;
+    group.add(n.mesh, n.sprite);
+  }
+
+  /* ---- 7.2 posição anatômica: cada categoria ocupa um lobo ---- */
+  placeNodesInLobes(g, rnd);
+
+  /* ---- 7.3 sinapses: tubo instanciado ---- */
+  const TUB = 40, RAD = 8;
+  const tpl = [], idx = [];
+  for (let i = 0; i <= TUB; i++) for (let j = 0; j < RAD; j++) tpl.push(i / TUB, (j / RAD) * Math.PI * 2, 0);
+  for (let i = 0; i < TUB; i++) for (let j = 0; j < RAD; j++) {
+    const a = i * RAD + j, b = i * RAD + (j + 1) % RAD, c = (i + 1) * RAD + j, d = (i + 1) * RAD + (j + 1) % RAD;
+    idx.push(a, c, b, b, c, d);
+  }
+  const E = g.edges.length;
+  const edgeGeo = new THREE.InstancedBufferGeometry();
+  edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(tpl, 3));
+  edgeGeo.setIndex(idx);
+  const mkInst = (size, usage) => { const a = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, E) * size), size); if (usage) a.setUsage(usage); return a; };
+  const attr = {
+    aA: mkInst(3, THREE.DynamicDrawUsage), aM: mkInst(3, THREE.DynamicDrawUsage), aB: mkInst(3, THREE.DynamicDrawUsage),
+    aColA: mkInst(3), aColB: mkInst(3), aProx: mkInst(1), aVis: mkInst(1, THREE.DynamicDrawUsage), aSeed: mkInst(1)
+  };
+  for (const [k, a] of Object.entries(attr)) edgeGeo.setAttribute(k, a);
+  edgeGeo.instanceCount = E;
+  for (const e of g.edges) {
+    const i = e.idx;
+    attr.aColA.setXYZ(i, e.a.color.r, e.a.color.g, e.a.color.b);
+    attr.aColB.setXYZ(i, e.b.color.r, e.b.color.g, e.b.color.b);
+    attr.aProx.setX(i, e.proximity);
+    attr.aSeed.setX(i, rnd());
+    e.base0 = (e.latent ? 0.06 : 0.45 + 0.55 * e.proximity) * g.visScale;
+    e.base = e.base0 * (0.4 + 0.6 * Math.max(e.a.heatT, e.b.heatT));   // sinapse de tema quente brilha mais
+    e.cross = Math.sign(e.a.pos.x) !== Math.sign(e.b.pos.x);   // cruza de um hemisfério ao outro
+    e.vis = 0; e.visTarget = e.base; e.active = false;
+    e.rand = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
+    // curva de CPU usada pelos fótons, idêntica à da GPU
+    e.ctrl = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    e.curve = new THREE.CatmullRomCurve3(e.ctrl, false, 'catmullrom', 0.5);
+  }
+  const edgeMat = new THREE.ShaderMaterial({
+    vertexShader: EDGE_VERT, fragmentShader: EDGE_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uThickness: { value: CFG.edgeThickness * (g.dense ? 1.05 : 1.2) } }
+  });
+  const edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
+  edgeMesh.frustumCulled = false;    // a bounding sphere do template não representa as curvas
+  edgeMesh.renderOrder = 2;
+  group.add(edgeMesh);
+
+  /* ---- 7.4 fótons ---- */
+  const pe = [], pt = [], ps = [], pd = [];
+  for (const e of g.edges) {
+    // grafo denso: menos fótons por sinapse; latentes não carregam fótons no repouso
+    const range = g.dense ? [1, 3] : CFG.photonsPerEdge;
+    const k = e.latent ? 0 : Math.round(lerp(range[0], range[1], e.proximity));
+    for (let i = 0; i < k; i++) { pe.push(e.idx); pt.push(rnd()); ps.push(0.08 + rnd() * 0.12 + e.proximity * 0.08); pd.push(rnd() < 0.5 ? 1 : -1); }
+  }
+  const P = pe.length;
+  const ph = createGlowQuads(P, glowMaterial);
+  ph.mesh.renderOrder = 3;
+  group.add(ph.mesh);
+
+  /* ---- 7.5 rótulos DOM ---- */
+  const labelsRoot = document.getElementById('labels');
+  for (const n of g.nodes) {
+    const el = document.createElement('div');
+    el.className = 'label';
+    el.style.setProperty('--c', n.hex);
+    el.innerHTML = `<i></i>${esc(n.short)}`;
+    labelsRoot.appendChild(el);
+    n.label = el; n.labelOpacity = -1; n.labelBig = false;
+    n.labelHalf = 22 + n.short.length * 4.3;   // meia largura estimada em px (fonte 11px, caixa alta)
+  }
+
+  Object.assign(g, {
+    group, edgeMesh, edgeGeo, edgeMat, attr,
+    photons: { mesh: ph.mesh, geo: ph.geo, pe: Int32Array.from(pe), pt: Float32Array.from(pt), ps: Float32Array.from(ps), pd: Int8Array.from(pd),
+               pos: ph.arrays.aOffset, col: ph.arrays.aColor, size: ph.arrays.aSize, alpha: ph.arrays.aAlpha, count: P },
+    centroid: new THREE.Vector3()
+  });
+  state.graph = g;
+
+  // a visão geral enquadra o cérebro inteiro (raio ~0.98 unidade de cérebro)
+  g.centroid.copy(BRAIN_CENTER);
+  const R = 0.98 * BRAIN.S;
+  // distância para uma esfera de raio R caber no campo de visão vertical (com folga para o HUD)
+  state.overviewDist = fitDistance(R);
+  controls.maxDistance = Math.max(140, state.overviewDist * 1.8);
+  // no modo automático, só os ~10 nós mais pesados mostram rótulo em repouso
+  g.labelCut = [...g.nodes].map(n => n.heatT).sort((a, b) => b - a)[Math.min(9, g.nodes.length - 1)];
+  // máximo de calor somado por lobo, em todas as semanas (normaliza a ativação do córtex)
+  g.lobeMax = 0;
+  for (let w = 0; w < NW; w++) for (const k of LOBE_ORDER) {
+    let t = 0; for (const n of g.nodes) if (n.lobe === k) t += g.weeks ? n.heatRaw[w] : n.weight;
+    if (t > g.lobeMax) g.lobeMax = t;
+  }
+
+  // entrada: os nós "germinam" em sequência, do mais pesado ao mais leve
+  [...g.nodes].sort((a, b) => b.weight - a.weight).forEach((n, i) => {
+    gsap.to(n, { s: 1, delay: 0.25 + i * 0.035, duration: 1.5, ease: 'elastic.out(1, 0.55)' });
+  });
+
+  buildLegend(); updateStats(); updateTargets(); buildTimeline(); updateLobeHeat();
+  return g;
+}
+
+/* =====================================================================================
+   8. DESCARTE (evita vazamento de memória ao trocar ou reorganizar o grafo)
+   ===================================================================================== */
+function disposeGraph(){
+  const g = state.graph;
+  if (!g) return;
+  state.delayed.forEach(d => d.kill()); state.delayed.length = 0;
+  for (const n of g.nodes) {
+    gsap.killTweensOf(n); gsap.killTweensOf(n.material.uniforms.uDim); gsap.killTweensOf(n.material.uniforms.uPulse);
+    gsap.killTweensOf(n.material.uniforms.uHover); gsap.killTweensOf(n.material.uniforms.uNeighbor);
+    n.material.dispose();                 // a geometria do nó é compartilhada e persiste
+    n.sprite.material.dispose();          // a textura do halo é compartilhada e persiste
+    n.label.remove();
+  }
+  g.edgeGeo.dispose(); g.edgeMat.dispose();
+  g.photons.geo.dispose();                // material e quad modelo são compartilhados e persistem
+  scene.remove(g.group);
+  // zera o pool de disparo (as partículas apontavam para arestas antigas)
+  burst.kind.fill(0); burst.alpha.fill(0); burst.size.fill(0);
+  markDirty(burst.q.geo, ['aAlpha', 'aSize']);
+  state.graph = null; state.hovered = null; state.selected = null; state.category = null;
+}
+
+/* =====================================================================================
+   9. FÍSICA: molas de Hooke ancoradas na anatomia
+   -------------------------------------------------------------------------------------
+   F_âncora = k_a * (repouso - posição)             (prende o neurônio ao seu lobo)
+   F_mola   = k_s * proximidade * (d - d_repouso)    (sinapses resistem a esticar ou encolher)
+   F_deriva = senoides lentas por nó                 (o tecido "respira")
+   Integração: Euler semi-implícito com amortecimento independente de FPS.
+   ===================================================================================== */
+const _d = new THREE.Vector3();
+function stepPhysics(g, dt, time, wander = true){
+  const P = CFG.physics, nodes = g.nodes;
+  for (const n of nodes) n.acc.subVectors(n.rest, n.pos).multiplyScalar(P.anchor);
+  for (const e of g.edges) {
+    if (e.latent) continue;
+    if (e.rest0 === undefined) e.rest0 = e.a.rest.distanceTo(e.b.rest);
+    _d.subVectors(e.b.pos, e.a.pos);
+    const dist = Math.max(_d.length(), 0.001);
+    _d.multiplyScalar(P.spring * e.proximity * (dist - e.rest0) / dist);
+    e.a.acc.addScaledVector(_d, 1 / e.a.mass); e.b.acc.addScaledVector(_d, -1 / e.b.mass);
+  }
+  for (const n of nodes) {
+    if (wander) {
+      const w = P.wander;
+      n.acc.x += Math.sin(time * 0.31 + n.phase[0]) * w;
+      n.acc.y += Math.cos(time * 0.27 + n.phase[1]) * w * 0.8;
+      n.acc.z += Math.sin(time * 0.23 + n.phase[2]) * w;
+    }
+    n.vel.addScaledVector(n.acc, dt);
+    n.vel.multiplyScalar(Math.pow(P.damping, dt * 60));
+    if (n.vel.length() > P.maxSpeed) n.vel.setLength(P.maxSpeed);
+    n.pos.addScaledVector(n.vel, dt);
+  }
+}
+
+/* =====================================================================================
+   10. ESTADOS VISUAIS (hover, seleção, foco por categoria)
+   ===================================================================================== */
+
+function neighborhood(node){
+  const first = new Set(), second = new Set();
+  if (!node) return { first, second };
+  node.links.forEach(l => first.add(l.node));
+  node.links.forEach(l => l.node.links.forEach(m => { if (m.node !== node && !first.has(m.node)) second.add(m.node); }));
+  return { first, second };
+}
+
+// Recalcula os alvos visuais de todos os nós e arestas a partir do estado atual
+function updateTargets(){
+  const g = state.graph; if (!g) return;
+  g.labelOrder = null;   // prioridades de rótulo mudam com hover, seleção e foco
+  const sel = state.selected, hov = state.hovered, cat = state.category;
+  const { first, second } = neighborhood(sel);
+
+  for (const n of g.nodes) {
+    let dim = 0, neighbor = 0;
+    if (sel) dim = (n === sel || first.has(n)) ? 0 : second.has(n) ? 0.5 : 0.9;
+    else if (cat) dim = n.category === cat ? 0 : 0.84;
+    if (sel && first.has(n)) neighbor = 0.45;
+    if (hov && hov !== n && hov.adj.has(n)) neighbor = Math.max(neighbor, 0.75);
+    if (n === hov) dim = Math.min(dim, 0.15);
+    if (n.dimTarget !== dim) { n.dimTarget = dim; gsap.to(n.material.uniforms.uDim, { value: dim, duration: 0.9, ease: 'power2.out', overwrite: true }); }
+    if (n.neighborTarget !== neighbor) { n.neighborTarget = neighbor; gsap.to(n.material.uniforms.uNeighbor, { value: neighbor, duration: 0.5, overwrite: true }); }
+  }
+  for (const e of g.edges) {
+    let v = e.base;
+    e.active = false;
+    if (sel) {
+      const touch = e.a === sel || e.b === sel;
+      if (touch) { v = 1; e.active = true; }                                   // inclui as latentes: elas "acordam"
+      else if (first.has(e.a) && first.has(e.b)) v = 0.24;                     // triângulos da vizinhança
+      else if ((first.has(e.a) || first.has(e.b)) && (second.has(e.a) || second.has(e.b))) v = 0.09;
+      else v = 0.022;
+    } else if (cat) {
+      const ia = e.a.category === cat, ib = e.b.category === cat;
+      v = ia && ib ? 0.95 : (ia || ib) ? 0.32 : 0.025;
+      e.active = ia && ib;
+    }
+    if (hov && (e.a === hov || e.b === hov)) v = Math.max(v, sel ? 0.55 : 0.88);
+    e.visTarget = v;
+  }
+}
+
+function setHover(node){
+  if (state.hovered === node) return;
+  const prev = state.hovered;
+  state.hovered = node;
+  if (prev) {
+    gsap.to(prev, { s: 1, duration: 0.6, ease: 'power3.out', overwrite: 'auto' });
+    gsap.to(prev.material.uniforms.uHover, { value: 0, duration: 0.5, overwrite: true });
+    gsap.to(prev, { halo: 0.1, duration: 0.6, overwrite: 'auto' });
+  }
+  if (node) {
+    gsap.to(node, { s: 1.18, duration: 0.55, ease: 'back.out(2)', overwrite: 'auto' });
+    gsap.to(node.material.uniforms.uHover, { value: 1, duration: 0.4, overwrite: true });
+    gsap.fromTo(node, { halo: 0.75 }, { halo: 0.4, duration: 0.9, ease: 'power2.out', overwrite: 'auto' });   // pulso de glow
+  }
+  renderer.domElement.style.cursor = node ? 'pointer' : 'grab';
+  updateTargets();
+}
+
+function pulseNode(n, strength = 1){
+  gsap.fromTo(n.material.uniforms.uPulse, { value: strength }, { value: 0, duration: 1.4, ease: 'expo.out', overwrite: true });
+  gsap.fromTo(n, { halo: 0.35 + strength * 0.6 }, { halo: n === state.hovered ? 0.4 : 0.1, duration: 1.4, ease: 'power2.out', overwrite: 'auto' });
+}
+
+/* ---------- Linha do tempo semanal ---------- */
+function fmtWeek(iso, short = false){
+  const [y, m, d] = iso.split('-');
+  return short ? `${d}/${m}` : `${d}/${m}/${y}`;
+}
+// calor somado de cada lobo na semana escolhida pinta o córtex com a cor da área
+function updateLobeHeat(){
+  const g = state.graph; if (!g) return;
+  const u = brain.shellMat.uniforms, damp = state.selected ? 0.25 : state.category ? 0.35 : 1;
+  LOBE_ORDER.forEach((k, i) => {
+    const cat = Object.keys(g.lobeOf || {}).find(c => g.lobeOf[c] === k);
+    let t = 0; for (const n of g.nodes) if (n.lobe === k) t += g.weeks ? n.heatRaw[state.week] : n.weight;
+    if (cat) u.uLobeCol.value[i].set(g.categories[cat].color);
+    brain.lobeTarget[i] = cat ? 0.75 * Math.sqrt(t / (g.lobeMax || 1)) * damp : 0;
+  });
+}
+function setWeek(w){
+  const g = state.graph; if (!g || !g.weeks) return;
+  state.week = clamp(Math.round(w), 0, g.weeks.length - 1);
+  for (const n of g.nodes) n.heatT = g.heatAt(n, state.week);
+  for (const e of g.edges) e.base = e.base0 * (0.4 + 0.6 * Math.max(e.a.heatT, e.b.heatT));
+  g.labelCut = [...g.nodes].map(n => n.heatT).sort((a, b) => b - a)[Math.min(9, g.nodes.length - 1)];
+  updateTargets(); updateLobeHeat(); syncTimeline();
+  if (state.selected && document.getElementById('panel').classList.contains('open')) renderPanel(state.selected);
+}
+function buildTimeline(){
+  const g = state.graph, tl = document.getElementById('timeline');
+  stopPlay();
+  tl.hidden = !g.weeks;
+  if (!g.weeks) { refreshUIRects(); return; }
+  const mx = Math.max(1, ...g.weekTotals), bars = document.getElementById('tlBars');
+  bars.innerHTML = g.weekTotals.map((v, i) => `<button data-w="${i}" style="height:${Math.max(8, Math.round(v / mx * 100))}%" aria-label="Semana de ${fmtWeek(g.weeks[i])}: ${v} registros"></button>`).join('');
+  bars.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { stopPlay(); setWeek(+b.dataset.w); }));
+  const r = document.getElementById('tlRange');
+  r.max = g.weeks.length - 1; r.value = state.week;
+  syncTimeline(); refreshUIRects();
+}
+function syncTimeline(){
+  const g = state.graph; if (!g || !g.weeks) return;
+  const w = state.week, last = w === g.weeks.length - 1;
+  document.getElementById('tlLabel').innerHTML = last
+    ? `<b>Esta semana</b> · ${fmtWeek(g.weeks[w], true)} a ${fmtWeek(state.graph.until || g.weeks[w], true)}`
+    : `<b>Semana de ${fmtWeek(g.weeks[w])}</b>`;
+  document.getElementById('tlCount').textContent = `${g.weekTotals[w]} registros`;
+  document.getElementById('tlRange').value = w;
+  document.querySelectorAll('#tlBars button').forEach((b, i) => b.classList.toggle('on', i === w));
+}
+let playTimer = null;
+function stopPlay(){
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  const ic = document.getElementById('tlIcon'); if (ic) ic.innerHTML = '<path d="M4 2.5v11l9-5.5z"/>';
+  const b = document.getElementById('tlPlay'); if (b) b.setAttribute('aria-label', 'Reproduzir as semanas');
+}
+function togglePlay(){
+  const g = state.graph; if (!g || !g.weeks) return;
+  if (playTimer) return stopPlay();
+  if (state.week >= g.weeks.length - 1) setWeek(0);
+  document.getElementById('tlIcon').innerHTML = '<path d="M4 2.5h3v11H4zM9 2.5h3v11H9z"/>';
+  document.getElementById('tlPlay').setAttribute('aria-label', 'Pausar');
+  playTimer = setInterval(() => {
+    if (state.week >= g.weeks.length - 1) return stopPlay();
+    setWeek(state.week + 1);
+  }, REDUCED ? 1600 : 1100);
+}
+
+// Ativação regional: a área do campo (ou do lobo) acende no córtex; o resto do cérebro recua.
+function brainFocus(center, color, radius, strength, shell, net){
+  const u = brain.shellMat.uniforms;
+  if (center) { u.uAct.value.copy(center); u.uActColor.value.copy(color); }
+  gsap.to(u.uActR, { value: radius, duration: 1.0, overwrite: true });
+  gsap.to(u.uActStr, { value: strength, duration: 1.2, ease: 'power2.out', overwrite: true });
+  gsap.to(u.uShell, { value: shell, duration: 1.0, overwrite: true });
+  gsap.to(brain.netMat.uniforms.uDim, { value: net, duration: 1.0, overwrite: true });
+  gsap.to(brain.neuronMat.uniforms.uDim, { value: Math.min(1, net * 1.25), duration: 1.0, overwrite: true });
+}
+
+// distância para uma esfera de raio R caber no campo mais estreito (vertical ou horizontal)
+function fitDistance(R){
+  const v = THREE.MathUtils.degToRad(camera.fov);
+  const h = 2 * Math.atan(Math.tan(v / 2) * camera.aspect);
+  return R / Math.sin(Math.min(v, h) / 2) * 1.04 + 2;
+}
+
+function select(node){
+  if (!node) return resetView();
+  brainFocus(node.rest, node.color, 0.34 * BRAIN.S, 1.1, 0.55, 0.32);
+  state.selected = node; updateLobeHeat();
+  state.selected = node;
+  // só os 12 vizinhos mais próximos ganham rótulo, para não poluir hubs com dezenas de ligações
+  state.labelSet = new Set(node.links.slice(0, labelBudget()).map(l => l.node));
+  state.category = null;
+  controls.autoRotate = false;
+  syncLegend();
+  updateTargets();
+  flyTo(node);
+  // o disparo sai um instante depois do início do voo: a câmera "chega" junto com a onda
+  state.delayed.push(gsap.delayedCall(REDUCED ? 0 : 0.35, () => synapticFire(node)));
+  renderPanel(node);
+  document.getElementById('hint').style.opacity = 0;
+}
+
+function resetView(){
+  brainFocus(null, null, 0.35 * BRAIN.S, 0, BRAIN_REST.shell, BRAIN_REST.net);
+  state.selected = null; state.category = null; updateLobeHeat();
+  state.category = null;
+  controls.autoRotate = !REDUCED && document.getElementById('btnOrbit').getAttribute('aria-pressed') === 'true';
+  syncLegend();
+  updateTargets();
+  flyToOverview();
+  document.getElementById('panel').classList.remove('open');
+  setViewShift(0, 0);
+}
+
+// quantos rótulos de vizinhos cabem sem poluir a tela
+const labelBudget = () => window.innerWidth <= 760 ? 6 : 12;
+
+function focusCategory(cat){
+  state.category = state.category === cat ? null : cat;
+  // foco por categoria: rótulo só nos campos mais pesados da categoria
+  state.labelSet = state.category && state.graph
+    ? new Set(state.graph.nodes.filter(n => n.category === state.category).sort((a, b) => b.heatT - a.heatT).slice(0, labelBudget()))
+    : null;
+  state.selected = null;
+  if (state.category && state.graph) {
+    const L = LOBES[state.graph.lobeOf[state.category]];
+    brainFocus(new THREE.Vector3(...L.c).multiplyScalar(BRAIN.S), new THREE.Color(state.graph.categories[state.category].color), L.r * BRAIN.S * 1.35, 1.0, 0.75, 0.55);
+  } else brainFocus(null, null, 0.35 * BRAIN.S, 0, BRAIN_REST.shell, BRAIN_REST.net);
+  document.getElementById('panel').classList.remove('open');
+  setViewShift(0, 0);
+  syncLegend();
+  updateTargets();
+  updateLobeHeat();
+  flyToOverview();
+}
+
+/* =====================================================================================
+   11. CÂMERA CINEMATOGRÁFICA (GSAP)
+   -------------------------------------------------------------------------------------
+   O voo interpola alvo e posição com easing e soma um arco vertical (seno do progresso).
+   O destino é recalculado a cada quadro a partir da posição viva do nó, então a câmera
+   acerta o nó mesmo que ele esteja flutuando.
+   ===================================================================================== */
+function flyTo(node){
+  if (state.flight) state.flight.kill();
+  const startT = controls.target.clone(), startC = camera.position.clone();
+  const dir = startC.clone().sub(startT).normalize().applyAxisAngle(UP, 0.42);
+  dir.y = clamp(dir.y, -0.3, 0.5); dir.normalize();
+  // em tela estreita (retrato) o campo horizontal encolhe: afasta a câmera na mesma proporção
+  // hubs com muitas ligações pedem mais distância: a câmera enquadra a vizinhança inteira
+  let ext = 0; node.links.forEach(l => { ext = Math.max(ext, node.pos.distanceTo(l.node.pos)); });
+  const dist = Math.min(Math.max(fitDistance(Math.max(6, ext * 0.75)), 10 + node.radius * 4.6), state.overviewDist * 0.85);
+  const arc = Math.min(6, startC.distanceTo(node.pos) * 0.12);
+  const prog = { p: 0 };
+  state.flying = true; controls.enabled = false;
+  state.flight = gsap.to(prog, {
+    p: 1, duration: REDUCED ? 0.6 : 1.85, ease: 'power3.inOut',
+    onUpdate(){
+      const e = prog.p;
+      const endC = _flyEnd.copy(node.pos).addScaledVector(dir, dist);
+      controls.target.lerpVectors(startT, node.pos, e);
+      camera.position.lerpVectors(startC, endC, e).addScaledVector(UP, Math.sin(Math.PI * e) * arc);
+    },
+    onComplete(){ state.flying = false; controls.enabled = true; state.flight = null; }
+  });
+}
+const _flyEnd = new THREE.Vector3();
+
+/* Deslocamento óptico da câmera: quando o painel abre, o centro da imagem se move para a
+   área livre (à esquerda no desktop, acima no celular). Usa setViewOffset, então raycast e
+   rótulos continuam corretos porque usam a mesma matriz de projeção. */
+const viewShift = { x: 0, y: 0 };
+function applyViewShift(){
+  const w = window.innerWidth, h = window.innerHeight;
+  if (Math.abs(viewShift.x) < 0.5 && Math.abs(viewShift.y) < 0.5) camera.clearViewOffset();
+  else camera.setViewOffset(w, h, viewShift.x, viewShift.y, w, h);
+  camera.updateProjectionMatrix();
+}
+function setViewShift(x, y){
+  if (!x && !y) requestAnimationFrame(refreshUIRects);   // painel fechou
+  gsap.to(viewShift, { x, y, duration: REDUCED ? 0.3 : 1.2, ease: 'power3.inOut', overwrite: true, onUpdate: applyViewShift });
+}
+function shiftForPanel(){
+  const panel = document.getElementById('panel');
+  if (window.innerWidth <= 760) setViewShift(0, (panel.offsetHeight + 112) / 2);
+  else setViewShift((panel.offsetWidth + 24) / 2, 0);
+}
+
+function flyToOverview(){
+  const g = state.graph; if (!g) return;
+  if (state.flight) state.flight.kill();
+  const startT = controls.target.clone(), startC = camera.position.clone();
+  const dir = startC.clone().sub(startT).normalize();
+  dir.y = clamp(dir.y, 0.12, 0.42); dir.normalize();
+  const prog = { p: 0 };
+  state.flying = true; controls.enabled = false;
+  state.flight = gsap.to(prog, {
+    p: 1, duration: REDUCED ? 0.6 : 1.6, ease: 'power3.inOut',
+    onUpdate(){
+      const endC = _flyEnd.copy(g.centroid).addScaledVector(dir, state.overviewDist);
+      controls.target.lerpVectors(startT, g.centroid, prog.p);
+      camera.position.lerpVectors(startC, endC, prog.p);
+    },
+    onComplete(){ state.flying = false; controls.enabled = true; state.flight = null; }
+  });
+}
+
+/* =====================================================================================
+   12. DISPARO SINÁPTICO: onda de choque + partículas que viajam até cada vizinho
+   ===================================================================================== */
+function synapticFire(node){
+  const g = state.graph; if (!g || state.selected !== node) return;
+  pulseNode(node, 1);
+
+  // casca esférica que se expande e some
+  shell.visible = true;
+  shell.material.uniforms.uColor.value.copy(node.color);
+  shell.position.copy(node.pos);
+  const sh = { r: node.radius, o: 1 };
+  gsap.killTweensOf(sh);
+  gsap.to(sh, { r: node.radius * 6.5, o: 0, duration: 1.25, ease: 'expo.out',
+    onUpdate(){ shell.scale.setScalar(sh.r); shell.material.uniforms.uOpacity.value = sh.o; shell.position.copy(node.pos); },
+    onComplete(){ shell.visible = false; } });
+
+  // anel radial de partículas (a "onda de choque")
+  const rnd = Math.random;
+  for (let i = 0; i < 260; i++) {
+    const k = burst.cursor; burst.cursor = (burst.cursor + 1) % burst.N;
+    burst.kind[k] = 2; burst.origin[k] = node.idx; burst.life[k] = -rnd() * 0.08; burst.dur[k] = 0.9 + rnd() * 0.5;
+    const th = rnd() * Math.PI * 2, ph = Math.acos(2 * rnd() - 1);
+    burst.rdir[k * 3] = Math.sin(ph) * Math.cos(th); burst.rdir[k * 3 + 1] = Math.cos(ph); burst.rdir[k * 3 + 2] = Math.sin(ph) * Math.sin(th);
+    burst.base[k] = 0.16 + rnd() * 0.22;
+    burst.c0[k * 3] = node.color.r; burst.c0[k * 3 + 1] = node.color.g; burst.c0[k * 3 + 2] = node.color.b;
+    burst.c1.set(burst.c0.subarray(k * 3, k * 3 + 3), k * 3);
+  }
+
+  // feixes de partículas pelas sinapses, do nó ativo para cada vizinho
+  for (const l of node.links) {
+    const e = l.edge, other = l.node;
+    const count = 16 + Math.round(l.proximity * 34);
+    const dur = 0.75 + (1 - l.proximity) * 0.7;        // mais próximo = chega mais rápido
+    for (let i = 0; i < count; i++) {
+      const k = burst.cursor; burst.cursor = (burst.cursor + 1) % burst.N;
+      burst.kind[k] = 1; burst.edge[k] = e.idx; burst.fwd[k] = e.a === node ? 1 : -1;
+      burst.life[k] = -rnd() * 0.3; burst.dur[k] = dur * (0.85 + rnd() * 0.3);
+      const j = 0.25 + rnd() * 0.6;
+      burst.jit[k * 3] = (rnd() - 0.5) * j; burst.jit[k * 3 + 1] = (rnd() - 0.5) * j; burst.jit[k * 3 + 2] = (rnd() - 0.5) * j;
+      burst.base[k] = 0.22 + rnd() * 0.3 + l.proximity * 0.15;
+      burst.c0[k * 3] = node.color.r; burst.c0[k * 3 + 1] = node.color.g; burst.c0[k * 3 + 2] = node.color.b;
+      burst.c1[k * 3] = other.color.r; burst.c1[k * 3 + 1] = other.color.g; burst.c1[k * 3 + 2] = other.color.b;
+    }
+    // quando a frente da onda chega, o vizinho pulsa (com força proporcional à proximidade)
+    state.delayed.push(gsap.delayedCall(dur * 0.95, () => { if (state.graph === g) pulseNode(other, 0.45 + l.proximity * 0.55); }));
+  }
+}
+
+const _tmp = new THREE.Vector3();
+function updateBurst(dt){
+  const g = state.graph, b = burst;
+  let any = false;
+  for (let k = 0; k < b.N; k++) {
+    const kind = b.kind[k];
+    if (kind === 0) { if (b.size[k] !== 0) { b.size[k] = 0; b.alpha[k] = 0; any = true; } continue; }
+    any = true;
+    b.life[k] += dt;
+    if (b.life[k] < 0) { b.alpha[k] = 0; b.size[k] = 0; continue; }
+    const p = b.life[k] / b.dur[k];
+    if (p >= 1 || !g) { b.kind[k] = 0; b.alpha[k] = 0; b.size[k] = 0; continue; }
+    if (kind === 1) {
+      const e = g.edges[b.edge[k]];
+      const pe = easeInOut(p);
+      e.curve.getPoint(b.fwd[k] > 0 ? pe : 1 - pe, _tmp);
+      const spread = Math.sin(Math.PI * p) * 1.1;
+      b.pos[k * 3] = _tmp.x + b.jit[k * 3] * spread;
+      b.pos[k * 3 + 1] = _tmp.y + b.jit[k * 3 + 1] * spread;
+      b.pos[k * 3 + 2] = _tmp.z + b.jit[k * 3 + 2] * spread;
+      b.alpha[k] = Math.pow(Math.sin(Math.PI * p), 0.6);
+      b.size[k] = b.base[k] * (1.25 - 0.5 * p);
+    } else {
+      const n = g.nodes[b.origin[k]];
+      const r = n.radius * n.s + easeOutExpo(p) * 7;
+      b.pos[k * 3] = n.pos.x + b.rdir[k * 3] * r;
+      b.pos[k * 3 + 1] = n.pos.y + b.rdir[k * 3 + 1] * r;
+      b.pos[k * 3 + 2] = n.pos.z + b.rdir[k * 3 + 2] * r;
+      b.alpha[k] = Math.pow(1 - p, 2);
+      b.size[k] = b.base[k] * (1 - p * 0.6);
+    }
+    for (let c = 0; c < 3; c++) b.col[k * 3 + c] = lerp(b.c0[k * 3 + c], b.c1[k * 3 + c], p) * 1.25;
+  }
+  if (any) markDirty(b.q.geo, ['aOffset', 'aColor', 'aSize', 'aAlpha']);
+}
+
+/* =====================================================================================
+   13. ATUALIZAÇÃO POR QUADRO: curvas, fótons, nós e rótulos
+   ===================================================================================== */
+const _mid = new THREE.Vector3(), _out = new THREE.Vector3(), _ab = new THREE.Vector3(), _perp = new THREE.Vector3();
+function updateEdges(g, dt){
+  const A = g.attr, k = Math.min(1, dt * 4.2);
+  for (const e of g.edges) {
+    // a fibra curva por dentro do cérebro: puxada para o eixo central (corpo caloso),
+    // com mais força quando cruza de um hemisfério ao outro, e um leve desvio lateral
+    _ab.subVectors(e.b.pos, e.a.pos);
+    const len = _ab.length();
+    _mid.addVectors(e.a.pos, e.b.pos).multiplyScalar(0.5);
+    _out.set(0, -0.02 * BRAIN.S, clamp(_mid.z, -0.45 * BRAIN.S, 0.5 * BRAIN.S));
+    _perp.copy(e.rand).addScaledVector(_ab, -e.rand.dot(_ab) / Math.max(len * len, 1e-6)).normalize();
+    e.ctrl[0].copy(e.a.pos);
+    e.ctrl[2].copy(e.b.pos);
+    e.ctrl[1].copy(_mid).lerp(_out, e.cross ? 0.55 : 0.18).addScaledVector(_perp, len * 0.07);
+    const i = e.idx;
+    A.aA.setXYZ(i, e.ctrl[0].x, e.ctrl[0].y, e.ctrl[0].z);
+    A.aM.setXYZ(i, e.ctrl[1].x, e.ctrl[1].y, e.ctrl[1].z);
+    A.aB.setXYZ(i, e.ctrl[2].x, e.ctrl[2].y, e.ctrl[2].z);
+    e.vis += (e.visTarget - e.vis) * k;          // transição suave de opacidade e espessura
+    A.aVis.setX(i, e.vis);
+  }
+  A.aA.needsUpdate = A.aM.needsUpdate = A.aB.needsUpdate = A.aVis.needsUpdate = true;
+}
+
+function updatePhotons(g, dt){
+  const P = g.photons, speedMul = REDUCED ? 0.35 : 1;
+  for (let k = 0; k < P.count; k++) {
+    const e = g.edges[P.pe[k]];
+    const boost = e.active ? 2.3 : 1;
+    let t = P.pt[k] + P.pd[k] * P.ps[k] * boost * speedMul * dt;
+    if (t > 1) t -= 1; else if (t < 0) t += 1;
+    P.pt[k] = t;
+    e.curve.getPoint(t, _tmp);
+    P.pos[k * 3] = _tmp.x; P.pos[k * 3 + 1] = _tmp.y; P.pos[k * 3 + 2] = _tmp.z;
+    const ca = e.a.color, cb = e.b.color, w = 1.7 + (e.active ? 0.8 : 0);
+    P.col[k * 3] = lerp(ca.r, cb.r, t) * w; P.col[k * 3 + 1] = lerp(ca.g, cb.g, t) * w; P.col[k * 3 + 2] = lerp(ca.b, cb.b, t) * w;
+    const ends = Math.pow(Math.sin(Math.PI * t), 0.5);   // some perto dos nós
+    P.alpha[k] = clamp(e.vis * 1.6, 0, 1) * (0.55 + 0.45 * e.proximity) * ends;
+    P.size[k] = (0.34 + e.proximity * 0.32) * (e.active ? 1.5 : 1);
+  }
+  markDirty(P.geo, ['aOffset', 'aColor', 'aSize', 'aAlpha']);
+}
+
+function updateNodes(g, time, dt = 1 / 60){
+  const k = Math.min(1, dt * 2.5);
+  for (const n of g.nodes) {
+    n.heat += (n.heatT - n.heat) * k;                       // transição suave entre semanas
+    n.radius = radiusFor(n, g);
+    n.material.uniforms.uGain.value = n.gain0 * (0.42 + 0.78 * n.heat);
+    const breathe = 1 + Math.sin(time * 1.15 + n.phase[0]) * 0.025;
+    const r = n.radius * n.s * breathe;
+    n.mesh.position.copy(n.pos);
+    n.mesh.scale.setScalar(Math.max(r, 1e-4));
+    n.sprite.position.copy(n.pos);
+    n.sprite.scale.setScalar(Math.max(r * 5.2, 1e-4));
+    n.sprite.material.opacity = n.halo * n.haloScale * (1 - n.material.uniforms.uDim.value * 0.9);
+    n.material.uniforms.uTime.value = time;
+  }
+}
+
+const _proj = new THREE.Vector3(), _camUp = new THREE.Vector3();
+function labelOpacity(n){
+  const sel = state.selected, hov = state.hovered, cat = state.category;
+  if (n === hov) return 1;
+  if (sel) { if (n === sel) return 1; if (state.labelSet && state.labelSet.has(n)) return 0.92; return state.labelsAll ? 0.18 : 0; }
+  if (cat) return state.labelSet && state.labelSet.has(n) ? 0.9 : (state.labelsAll ? (n.category === cat ? 0.6 : 0.15) : 0);
+  if (state.labelsAll) return 0.8;
+  return n.heatT >= state.graph.labelCut ? 0.55 : 0;
+}
+// áreas da interface onde rótulos não aparecem (HUD, busca, barra, painel aberto)
+let uiRects = [];
+function refreshUIRects(){
+  const els = ['.hud', '.search', '.toolbar', '.hint'].map(q => document.querySelector(q));
+  const tl = document.getElementById('timeline'); if (tl && !tl.hidden) els.push(tl);
+  const panel = document.getElementById('panel');
+  if (panel.classList.contains('open')) els.push(panel);
+  uiRects = els.filter(Boolean).map(el => el.getBoundingClientRect());
+}
+// caixa aproximada do rótulo (ancorado no centro inferior) contra cada área da interface
+const insideUI = (x, y, half) => uiRects.some(r => x + half > r.left && x - half < r.right && y > r.top && y - 30 < r.bottom);
+const _placedBoxes = [];
+function labelPriority(n){
+  if (n === state.hovered) return 10; if (n === state.selected) return 9;
+  return n.heatT + (state.labelSet && state.labelSet.has(n) ? 2 : 0);
+}
+function updateLabels(g){
+  const w = window.innerWidth, h = window.innerHeight;
+  // ordem de prioridade: quem vem antes reserva espaço; rótulo que colide com um anterior some
+  if (!g.labelOrder || (state.frameLabelSort = (state.frameLabelSort || 0) + 1) % 20 === 0) g.labelOrder = [...g.nodes].sort((a, b) => labelPriority(b) - labelPriority(a));
+  _placedBoxes.length = 0;
+  _camUp.setFromMatrixColumn(camera.matrixWorld, 1);   // eixo "para cima" da câmera
+  for (const n of g.labelOrder) {
+    let o = n.s < 0.4 ? 0 : labelOpacity(n);
+    _proj.copy(n.pos).addScaledVector(_camUp, n.radius * n.s * 1.35).project(camera);
+    if (_proj.z > 1) o = 0;                                  // atrás da câmera
+    // o rótulo fica inteiro dentro da tela, mesmo quando o nó está perto da borda
+    const x = clamp((_proj.x * 0.5 + 0.5) * w, n.labelHalf + 6, w - n.labelHalf - 6), y = clamp((-_proj.y * 0.5 + 0.5) * h, 34, h - 4);
+    if (o > 0 && n !== state.hovered && insideUI(x, y, n.labelHalf)) o = 0;  // não cobre a interface
+    if (o > 0) {
+      const hw = n.labelHalf * (n === state.selected || n === state.hovered ? 1.2 : 1);
+      if (_placedBoxes.some(b => x + hw > b[0] && x - hw < b[1] && y > b[2] && y - 30 < b[3])) o = 0;
+      else _placedBoxes.push([x - hw - 4, x + hw + 4, y - 32, y + 2]);
+    }
+    if (o !== n.labelOpacity) { n.label.style.opacity = o; n.labelOpacity = o; }
+    const big = n === state.selected || n === state.hovered;
+    if (big !== n.labelBig) { n.label.classList.toggle('big', big); n.labelBig = big; }
+    if (o > 0 || n.label.style.opacity !== '0') {
+      n.label.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%)`;
+    }
+  }
+}
+
+/* =====================================================================================
+   14. RAYCAST SOB DEMANDA (contra esferas analíticas, O(n))
+   ===================================================================================== */
+const raycaster = new THREE.Raycaster();
+const _sphere = new THREE.Sphere(), _hit = new THREE.Vector3();
+function pick(ndc){
+  const g = state.graph; if (!g) return null;
+  raycaster.setFromCamera(ndc, camera);
+  let best = null, bestD = Infinity;
+  for (const n of g.nodes) {
+    if (n.s < 0.3) continue;
+    _sphere.set(n.pos, n.radius * Math.max(n.s, 1) * 1.08);
+    if (raycaster.ray.intersectSphere(_sphere, _hit)) {
+      const d = _hit.distanceToSquared(camera.position);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+  }
+  return best;
+}
+
+/* =====================================================================================
+   15. UI: legenda, estatísticas, painel e busca
+   ===================================================================================== */
+function buildLegend(){
+  const g = state.graph, root = document.getElementById('legend');
+  root.innerHTML = '';
+  const counts = {};
+  g.nodes.forEach(n => { counts[n.category] = (counts[n.category] || 0) + 1; });
+  for (const [key, c] of Object.entries(g.categories)) {
+    if (!counts[key]) continue;
+    const b = document.createElement('button');
+    b.className = 'chip'; b.dataset.cat = key; b.style.setProperty('--c', c.color);
+    b.innerHTML = `<i></i>${esc(c.label)} <b>${counts[key]}</b>`;
+    b.title = LOBES[g.lobeOf[key]] ? LOBES[g.lobeOf[key]].label : '';
+    b.addEventListener('click', () => focusCategory(key));
+    root.appendChild(b);
+  }
+}
+function syncLegend(){
+  document.querySelectorAll('#legend .chip').forEach(b => {
+    b.classList.toggle('on', state.category === b.dataset.cat);
+    b.classList.toggle('mute', !!state.category && state.category !== b.dataset.cat);
+  });
+}
+function updateStats(){
+  const g = state.graph;
+  const latent = g.edges.filter(e => e.latent).length;
+  document.getElementById('stats').textContent =
+    `${g.nodes.length} campos · ${g.edges.length} sinapses · ${latent} latentes · ${brain.stats.neurons + brain.stats.surfacePoints} neurônios de fundo · ${brain.stats.fibers} fibras`;
+}
+// histograma semanal do tema no painel + total recente
+function activityHTML(node){
+  const g = state.graph, a = node.raw.act;
+  if (!g.weeks || !Array.isArray(a)) return '';
+  const mx = Math.max(1, ...a), w = state.week;
+  const last4 = a.slice(Math.max(0, w - 3), w + 1).reduce((t, v) => t + v, 0);
+  const bars = a.map((v, i) => `<i class="${i === w ? 'on' : ''}" style="height:${Math.max(6, Math.round(v / mx * 100))}%" title="${fmtWeek(g.weeks[i])}: ${v}"></i>`).join('');
+  return `<div class="p-spark" aria-label="Registros datados por semana">${bars}</div>
+    <p class="p-sub">${last4} registros nas 4 semanas até ${fmtWeek(g.weeks[w], true)}. ${a.reduce((t, v) => t + v, 0)} no período todo.</p>`;
+}
+
+function renderPanel(node){
+  const g = state.graph, cat = g.categories[node.category] || { label: node.category, color: node.hex };
+  const { second } = neighborhood(node);
+  const latent = node.links.filter(l => l.edge.latent).length;
+  const panel = document.getElementById('panel');
+  panel.style.setProperty('--c', node.hex);
+  panel.innerHTML = `
+    <div class="p-cat"><i></i>${esc(cat.label)}</div>
+    <h2>${esc(node.name)}</h2>
+    <div class="p-meta">${esc([node.raw.meta, node.lobeLabel].filter(Boolean).join(' · '))}</div>
+    <div class="meter"><span>Calor</span><div class="bar"><b style="width:${Math.round(node.heatT * 100)}%"></b></div><span class="mono">${node.heatT.toFixed(2)}</span></div>
+    ${activityHTML(node)}
+    <p class="p-sub">${node.links.length} sinapses diretas${latent ? `, ${latent} latentes despertadas` : ''}. ${second.size} campos a dois saltos.</p>
+    <ul class="conns">${node.links.map(l => `
+      <li><button data-id="${esc(l.node.id)}" style="--c:${l.node.hex}">
+        <i></i><span>${esc(l.node.name)}${l.edge.latent ? '<em>latente</em>' : ''}</span>
+        <div class="bar"><b style="width:${Math.round(l.proximity * 100)}%"></b></div>
+        <span class="mono">${l.proximity.toFixed(2)}</span>
+      </button></li>`).join('')}
+    </ul>
+    <button class="ghost" id="panelBack">Voltar à visão geral (Esc)</button>`;
+  panel.querySelectorAll('.conns button').forEach(b => {
+    b.addEventListener('click', () => select(g.byId.get(b.dataset.id)));
+    b.addEventListener('mouseenter', () => setHover(g.byId.get(b.dataset.id)));
+    b.addEventListener('mouseleave', () => setHover(null));
+  });
+  panel.querySelector('#panelBack').addEventListener('click', resetView);
+  panel.classList.add('open');
+  panel.scrollTop = 0;
+  shiftForPanel();
+  refreshUIRects();
+}
+
+// busca com tolerância a acento
+const qInput = document.getElementById('q'), sugg = document.getElementById('sugg');
+let suggItems = [], suggIdx = 0;
+function renderSugg(){
+  const g = state.graph, q = fold(qInput.value.trim());
+  if (!q) { sugg.classList.remove('on'); suggItems = []; return; }
+  suggItems = g.nodes.filter(n => fold(n.name).includes(q)).sort((a, b) => b.weight - a.weight).slice(0, 6);
+  suggIdx = 0;
+  sugg.innerHTML = suggItems.length
+    ? suggItems.map((n, i) => `<li><button data-id="${esc(n.id)}" class="${i === 0 ? 'kb' : ''}" style="--c:${n.hex}"><i></i>${esc(n.name)}<span>${n.links.length} sin.</span></button></li>`).join('')
+    : `<li><button disabled>Nenhum campo encontrado</button></li>`;
+  sugg.classList.add('on');
+  sugg.querySelectorAll('button[data-id]').forEach(b => b.addEventListener('click', () => pickSugg(g.byId.get(b.dataset.id))));
+}
+function pickSugg(n){ if (!n) return; qInput.value = ''; sugg.classList.remove('on'); qInput.blur(); select(n); }
+
+/* =====================================================================================
+   16. EVENTOS
+   ===================================================================================== */
+const listeners = [];
+function on(target, type, fn, opts){ target.addEventListener(type, fn, opts); listeners.push([target, type, fn, opts]); }
+
+const canvas = renderer.domElement;
+canvas.style.cursor = 'grab';
+let downX = 0, downY = 0, downT = 0;
+on(canvas, 'pointermove', ev => {
+  state.pointerNDC.set((ev.clientX / window.innerWidth) * 2 - 1, -(ev.clientY / window.innerHeight) * 2 + 1);
+  state.pointerDirty = true; state.pointerInside = true;
+});
+on(canvas, 'pointerleave', () => { state.pointerInside = false; setHover(null); });
+on(canvas, 'pointerdown', ev => { downX = ev.clientX; downY = ev.clientY; downT = performance.now(); canvas.style.cursor = 'grabbing'; });
+on(canvas, 'pointerup', ev => {
+  canvas.style.cursor = state.hovered ? 'pointer' : 'grab';
+  const moved = Math.hypot(ev.clientX - downX, ev.clientY - downY);
+  if (moved > 6 || performance.now() - downT > 600) return;    // foi arraste, não clique
+  const ndc = new THREE.Vector2((ev.clientX / window.innerWidth) * 2 - 1, -(ev.clientY / window.innerHeight) * 2 + 1);
+  const n = pick(ndc);
+  if (n) { if (n === state.selected) synapticFire(n); else select(n); }
+  else if (state.selected || state.category) resetView();
+});
+on(window, 'keydown', ev => {
+  if (ev.key === 'Escape') { if (document.activeElement === qInput) { qInput.value = ''; renderSugg(); qInput.blur(); } else resetView(); }
+  if (ev.key === '/' && document.activeElement !== qInput) { ev.preventDefault(); qInput.focus(); }
+});
+on(qInput, 'input', renderSugg);
+on(qInput, 'keydown', ev => {
+  if (!suggItems.length) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    suggIdx = (suggIdx + (ev.key === 'ArrowDown' ? 1 : suggItems.length - 1)) % suggItems.length;
+    sugg.querySelectorAll('button[data-id]').forEach((b, i) => b.classList.toggle('kb', i === suggIdx));
+  }
+  if (ev.key === 'Enter') pickSugg(suggItems[suggIdx]);
+});
+on(document.getElementById('btnReset'), 'click', resetView);
+on(document.getElementById('btnOrbit'), 'click', ev => {
+  const b = ev.currentTarget, v = b.getAttribute('aria-pressed') !== 'true';
+  b.setAttribute('aria-pressed', String(v));
+  controls.autoRotate = v && !state.selected;
+});
+on(document.getElementById('btnLabels'), 'click', ev => {
+  const b = ev.currentTarget; state.labelsAll = !state.labelsAll; b.setAttribute('aria-pressed', String(state.labelsAll));
+});
+on(document.getElementById('btnRebuild'), 'click', () => {
+  state.seed = (state.seed * 1103515245 + 12345) >>> 0;
+  const raw = state.graph.rawInput;
+  disposeGraph(); const g = buildGraph(raw, state.seed); g.rawInput = raw;
+  document.getElementById('panel').classList.remove('open');
+  setViewShift(0, 0);
+  flyToOverview();
+});
+on(document.getElementById('tlPlay'), 'click', togglePlay);
+on(document.getElementById('tlRange'), 'input', ev => { stopPlay(); setWeek(+ev.target.value); });
+const DATASETS = { real: BRAIN_DATA || MOCK_GRAPH, mock: MOCK_GRAPH };
+let currentSet = 'real';
+function loadSet(key){
+  currentSet = key;
+  const raw = DATASETS[key];
+  disposeGraph(); const g = buildGraph(raw, state.seed); g.rawInput = raw;
+  document.getElementById('panel').classList.remove('open');
+  setViewShift(0, 0);
+  flyToOverview();
+  syncDataUI(raw);
+}
+function syncDataUI(raw){
+  const btn = document.getElementById('btnData');
+  btn.hidden = !BRAIN_DATA;   // sem grafo injetado, só existe o exemplo
+  btn.textContent = currentSet === 'real' ? 'Ver exemplo' : 'Ver meu cérebro';
+  document.getElementById('eyebrow').textContent = raw.source ? `Cognitive graph · ${raw.source}` : 'Cognitive graph · dados de exemplo';
+}
+on(document.getElementById('btnData'), 'click', () => loadSet(currentSet === 'real' ? 'mock' : 'real'));
+
+on(window, 'resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h); composer.setSize(w, h);
+  state.overviewDist = fitDistance(0.98 * BRAIN.S);
+  refreshUIRects();
+  if (state.selected) shiftForPanel(); else applyViewShift();
+});
+
+/* =====================================================================================
+   17. LAÇO PRINCIPAL
+   ===================================================================================== */
+const clock = new THREE.Clock();
+let raf = 0, frame = 0, fpsT0 = performance.now(), fpsFrames = 0;
+const fpsEl = document.getElementById('fps');
+const _follow = new THREE.Vector3();
+function tick(){
+  raf = requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 1 / 30);   // limita o passo após troca de aba
+  const time = clock.elapsedTime;
+  frame++;
+  const g = state.graph;
+  if (g) {
+    stepPhysics(g, dt, time, !REDUCED);
+    g.centroid.copy(BRAIN_CENTER);
+    updateNodes(g, time, dt);
+    updateEdges(g, dt);
+    updatePhotons(g, dt);
+    g.edgeMat.uniforms.uTime.value = time;
+
+    // a câmera acompanha suavemente o nó ativo, que continua flutuando
+    if (state.selected && !state.flying) {
+      _follow.subVectors(state.selected.pos, controls.target).multiplyScalar(Math.min(1, dt * 3));
+      controls.target.add(_follow); camera.position.add(_follow);
+    }
+    // raycast só quando o mouse mexe, ou a cada 8 quadros se ele está parado sobre a cena
+    if (state.pointerInside && (state.pointerDirty || frame % 8 === 0) && !state.flying) {
+      state.pointerDirty = false;
+      setHover(pick(state.pointerNDC));
+    }
+  }
+  updateBurst(dt);
+  dust.mesh.material.uniforms.uTime.value = time;
+  brain.update(time, dt);
+  controls.update();
+  composer.render();
+  if (g) updateLabels(g);
+
+  // FPS medido em tempo real de parede (o dt da simulação é limitado e não serve para isso)
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsT0 >= 500) { fpsEl.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsT0))} fps`; fpsT0 = now; fpsFrames = 0; }
+}
+
+/* =====================================================================================
+   18. INICIALIZAÇÃO E API PÚBLICA
+   ===================================================================================== */
+{
+  const g = buildGraph(DATASETS.real); g.rawInput = DATASETS.real;
+  syncDataUI(DATASETS.real);
+  refreshUIRects();
+  controls.target.copy(g.centroid);
+  // abertura: dolly de longe até a visão geral
+  // vista 3/4: frente e lado esquerdo, um pouco de cima, para ler hemisférios e lobos
+  const endC = new THREE.Vector3(-0.62, 0.34, 0.71).normalize().multiplyScalar(state.overviewDist).add(BRAIN_CENTER);
+  gsap.to(camera.position, { x: endC.x, y: endC.y, z: endC.z, duration: REDUCED ? 0.1 : 3.2, ease: 'power3.out' });
+  tick();
+}
+
+function destroy(){
+  cancelAnimationFrame(raf);
+  listeners.forEach(([t, ty, fn, o]) => t.removeEventListener(ty, fn, o)); listeners.length = 0;
+  if (state.flight) state.flight.kill();
+  disposeGraph();
+  [nebula, shell].forEach(m => { m.geometry.dispose(); m.material.dispose(); });
+  brain.dispose();
+  dust.geo.dispose(); dust.mesh.material.dispose();
+  burst.q.geo.dispose(); glowMaterial.dispose(); quadTemplate.dispose();
+  nodeGeometry.dispose(); nodeGeometryLo.dispose(); haloTexture.dispose();
+  bloomPass.dispose(); composer.dispose(); rt.dispose();
+  controls.dispose(); renderer.dispose();
+  renderer.domElement.remove();
+}
+
+window.CerebroSemantico = {
+  setData(raw){ disposeGraph(); const g = buildGraph(raw, state.seed); g.rawInput = raw; flyToOverview(); return { nodes: g.nodes.length, edges: g.edges.length }; },
+  select(idOrName){
+    const g = state.graph; if (!g) return false;
+    const n = g.byId.get(String(idOrName)) || g.nodes.find(x => fold(x.name) === fold(idOrName));
+    if (n) select(n); return !!n;
+  },
+  reset: resetView,
+  destroy,
+  // posição de um nó na tela (px), útil para ancorar UI externa ou testes
+  screenPosition(id){
+    const g = state.graph; const n = g && (g.byId.get(String(id)) || g.nodes.find(x => fold(x.name) === fold(id))); if (!n) return null;
+    const v = n.pos.clone().project(camera);
+    return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight, visible: v.z < 1 };
+  }
+};
+</script>
+</body>
+</html>

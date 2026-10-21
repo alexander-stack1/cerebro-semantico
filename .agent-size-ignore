@@ -1,0 +1,2 @@
+# Exceções ao limite de 20.000 bytes por arquivo. Um padrão por linha, com justificativa.
+prototype/cerebro-semantico-3d.html   # protótipo de arquivo único (viewer + grafo de exemplo embutido); a modularização é o item 1 do roadmap em docs/HANDOFF.md (ADR-005)
