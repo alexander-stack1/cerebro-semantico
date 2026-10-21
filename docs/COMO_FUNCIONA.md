@@ -1,6 +1,10 @@
 # Como funciona
 
+**Português** | [English](en/HOW_IT_WORKS.md)
+
 O Cérebro Semântico transforma notas Markdown em dados de um grafo e incorpora esses dados em um visualizador HTML interativo. O processamento é local: você aponta a configuração para o vault e executa os scripts. O exemplo incluído é fictício.
+
+Esta versão foi preparada especialmente para construir histórico a partir de mensagens coletadas pela API do WhatsApp, por meio de uma integração externa. O pipeline recebe NDJSON normalizado; não inclui conector, webhook ou recuperação automática de conversas anteriores. Veja [o fluxo de histórico do WhatsApp](WHATSAPP.md).
 
 ## Caminho principal
 
@@ -51,7 +55,7 @@ Essas etapas são opcionais. O usuário escolhe e configura ferramentas e modelo
 - A redação cobre padrões conhecidos, sobretudo formatos brasileiros. Não detecta de forma abrangente nomes no texto, endereços, datas de nascimento, dados escritos por extenso, conteúdo em imagem ou áudio sem transcrição, nem formatos de outros países. Não é garantia de anonimização.
 - A varredura de nomes depende das notas do tipo configurado, das listas e exceções locais. Uma checagem sem ocorrências não prova ausência de dado pessoal.
 - O grafo expõe títulos e relações das notas embutidas. Revise o HTML antes de compartilhar.
-- A página pode ser aberta como arquivo local, mas depende de rede para baixar Three.js e GSAP pelo jsDelivr. A reprodução de vídeo da galeria é manual, acionada pelo link da miniatura.
+- A página pode ser aberta como arquivo local, mas depende de rede para baixar Three.js e GSAP pelo jsDelivr. As prévias GIF aparecem no README; os links diretos permitem baixar os vídeos completos.
 - As imagens e os vídeos da galeria são capturas reais em Chromium com renderização por software SwiftShader, sem áudio. A fluidez pode ser limitada pela ausência de GPU e não mede o desempenho em GPU. [docs/media/origin.json](media/origin.json) registra a origem e os hashes. Confira com `python3 tools/visual/demo_media.py --verify-ci`.
 - O pipeline usa Python 3.9+ e biblioteca padrão. Os testes também usam `unittest` da biblioteca padrão. O smoke visual é opcional e requer Playwright, Pillow e NumPy.
 - Safari e Firefox: **NÃO VERIFICADO**. O comportamento de Windows e frontmatter YAML multilinha também está marcado como não verificado no mapa do repositório.

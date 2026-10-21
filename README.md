@@ -1,19 +1,38 @@
-# Cérebro Semântico
+# Cérebro Semântico · Semantic Brain
+
+**Português** | [English](README.en.md)
 
 [![CI](https://github.com/alexander-stack1/cerebro-semantico/actions/workflows/ci.yml/badge.svg)](https://github.com/alexander-stack1/cerebro-semantico/actions/workflows/ci.yml)
 [![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 
-> Converte notas Markdown no formato Obsidian em um grafo de temas e explora as conexões em um cérebro 3D interativo.
+> Transforme mensagens do WhatsApp em um histórico organizado por temas e explore suas conexões em um cérebro 3D. Esta versão foi preparada especialmente para integrar mensagens coletadas pela API do WhatsApp a um vault de notas Markdown.
 
 ![Visão geral do cérebro 3D](docs/media/visao-geral.png)
 
+A coleta pela API e a adaptação das mensagens são feitas por uma integração externa. Este repositório oferece o processamento dos extratos, do vault e do grafo; também funciona com notas Markdown criadas por outras fontes. A interface e o exemplo permanecem em português; os guias de entrada estão disponíveis nos dois idiomas.
+
 ## Sumário
 
+- [Histórico a partir do WhatsApp](#histórico-a-partir-do-whatsapp)
 - [Início rápido](#início-rápido)
 - [Galeria](#galeria)
 - [Capacidades e limites](#capacidades-e-limites)
 - [Documentação](#documentação)
+
+## Histórico a partir do WhatsApp
+
+```text
+API do WhatsApp → coleta e adaptação externas → mensagens novas em NDJSON
+→ extratos redigidos por tema → atualização das notas por modelo externo
+→ validação e linha do tempo → grafo → cérebro 3D
+```
+
+As conversas podem alimentar um histórico contínuo de projetos, decisões, compromissos e assuntos recorrentes. O histórico consolidado fica nas notas Markdown; as datas permitem acompanhar a evolução dos temas por semana.
+
+O projeto recebe mensagens já coletadas e normalizadas. Ele não conecta uma conta ao WhatsApp, não recebe webhooks sozinho e não recupera automaticamente conversas antigas. Coleta, autenticação, controle de mensagens já processadas e execução periódica ficam na integração externa. A atualização das notas pelo modelo também é uma etapa externa, orientada pelo briefing incluído.
+
+**[Configurar o fluxo de histórico do WhatsApp →](docs/WHATSAPP.md)** · [Como funciona o grafo](docs/COMO_FUNCIONA.md)
 
 ## Início rápido
 
@@ -41,7 +60,7 @@ O vault usa notas `.md`, frontmatter simples em linhas `chave: valor`, wikilinks
 
 ## Galeria
 
-As imagens mostram a visão geral, o tema selecionado e a linha do tempo. Clique nas miniaturas para abrir os vídeos correspondentes.
+As imagens mostram a visão geral, o tema selecionado e a linha do tempo. As prévias animadas abaixo são trechos de 30 segundos das gravações reais.
 
 | Visão geral | Tema ativo | Linha do tempo |
 |---|---|---|
@@ -49,11 +68,13 @@ As imagens mostram a visão geral, o tema selecionado e a linha do tempo. Clique
 
 | Demonstração | Demonstração da linha do tempo |
 |---|---|
-| [![Assistir à navegação no cérebro](docs/media/visao-geral.png)](docs/media/navegacao.mp4) | [![Assistir à linha do tempo](docs/media/linha-do-tempo.png)](docs/media/linha-do-tempo.mp4) |
+| [![Prévia animada de navegação e busca](docs/media/navegacao.gif)](https://github.com/alexander-stack1/cerebro-semantico/raw/refs/heads/main/docs/media/navegacao.mp4) | [![Prévia animada da linha do tempo](docs/media/linha-do-tempo.gif)](https://github.com/alexander-stack1/cerebro-semantico/raw/refs/heads/main/docs/media/linha-do-tempo.mp4) |
 
-As miniaturas são links para os arquivos de vídeo. A reprodução depende do visualizador de Markdown ou navegador.
+**MP4 completos:** [baixar navegação e busca · 1min27s](https://github.com/alexander-stack1/cerebro-semantico/raw/refs/heads/main/docs/media/navegacao.mp4) · [baixar linha do tempo · 1min15s](https://github.com/alexander-stack1/cerebro-semantico/raw/refs/heads/main/docs/media/linha-do-tempo.mp4).
 
-As mídias são capturas reais do Chromium com renderização por software SwiftShader, sem áudio. A fluidez pode ser limitada pelo renderizador sem GPU e não representa o desempenho em GPU. A origem e os hashes estão em [docs/media/origin.json](docs/media/origin.json). Verifique a captura e o artefato de CI com `python3 tools/visual/demo_media.py --verify-ci`.
+O GitHub pode não reproduzir MP4 na página do arquivo. Estes links acessam o arquivo diretamente; se o navegador baixar o vídeo, abra-o no player local. As prévias GIF mostram o movimento no README. Enquanto o repositório for privado, o acesso exige uma conta autorizada.
+
+As mídias são capturas reais do Chromium com renderização por software SwiftShader, sem áudio. A fluidez pode ser limitada pelo renderizador sem GPU e não representa o desempenho em GPU. A origem e os hashes estão em [docs/media/origin.json](docs/media/origin.json). Verifique a captura e o artefato de CI com `python3 tools/visual/demo_media.py --verify-ci`. Os GIFs derivam desses MP4s; veja [o manifesto das prévias](docs/media/animated-origin.json).
 
 ## Capacidades e limites
 
@@ -66,17 +87,14 @@ As mídias são capturas reais do Chromium com renderização por software Swift
 
 ## Documentação
 
-- [Como funciona](docs/COMO_FUNCIONA.md)
+- [Histórico do WhatsApp](docs/WHATSAPP.md) · [English guide](docs/en/WHATSAPP.md)
+- [Como funciona](docs/COMO_FUNCIONA.md) · [How it works](docs/en/HOW_IT_WORKS.md)
 - [Roteiros e reprodução das demonstrações](docs/DEMONSTRACOES.md)
 - [Formato do grafo](docs/FORMATO_GRAFO.md)
 - [Privacidade e limites da redação](docs/PRIVACIDADE.md)
 - [Mapa do repositório](docs/agent/REPO_MAP.md)
 
 Captura do exemplo: [imagem](docs/img/preview.png) · [proveniência e hashes](docs/img/preview-origin.json). Verifique a origem com `python3 tools/visual/preview.py --check --verify-ci`.
-
-## English summary
-
-Cérebro Semântico turns an Obsidian-style Markdown vault into an interactive 3D brain. Topic notes become neurons placed in the lobe of their area, wikilinks become synapses, and a weekly timeline shows how “hot” each topic was. Open `prototype/cerebro-semantico-3d.html` to see the fictional example. To use your own vault, copy `config/config.example.json`, then run `pipeline/build_graph.py` and `pipeline/embed_viewer.py`. The pipeline is pure Python standard library (3.9+). An optional message pipeline redacts personal data (Brazilian formats) before any text reaches a language model. The UI and docs are in Brazilian Portuguese.
 
 ## Desenvolvimento
 
