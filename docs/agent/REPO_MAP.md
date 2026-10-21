@@ -3,7 +3,7 @@
 ```
 status: draft
 generated_at: 2026-10-21
-git_sha: sem commit (preencher após o primeiro commit)
+git_sha: f6b5054
 generator: humano + Claude, revisão do mantenedor pendente
 ```
 
@@ -66,7 +66,7 @@ O script do HTML tem 18 seções numeradas em comentários de bloco (busque `   
 
 ## Como regenerar
 
-Ver "Regenerar os artefatos de exemplo" no `CLAUDE.md`. Após o primeiro commit, preencher `git_sha` acima.
+Ver "Regenerar os artefatos de exemplo" no `CLAUDE.md`. Ao mudar a estrutura do repo, atualize `git_sha` acima.
 
 ## NÃO VERIFICADO
 

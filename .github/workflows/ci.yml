@@ -10,8 +10,10 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Fixo em 24.04: a imagem 26.04 (ubuntu-latest) não tem Python 3.9 no setup-python.
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         python: ['3.9', '3.12']
     steps:
