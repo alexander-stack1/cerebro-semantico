@@ -1,79 +1,92 @@
 # Cérebro Semântico
 
-Transforma um vault de notas Markdown (formato Obsidian) num cérebro 3D navegável. Cada nota de tema vira um neurônio no lobo da sua área. Cada link vira uma sinapse. Uma linha do tempo semanal mostra quais assuntos esquentaram e quais esfriaram.
+[![CI](https://github.com/alexander-stack1/cerebro-semantico/actions/workflows/ci.yml/badge.svg)](https://github.com/alexander-stack1/cerebro-semantico/actions/workflows/ci.yml)
+[![Licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 
-![Visão geral do cérebro com o vault de exemplo](docs/img/preview.png)
+> Converte notas Markdown no formato Obsidian em um grafo de temas e explora as conexões em um cérebro 3D interativo.
 
-Origem da captura: [fontes e hashes](docs/img/preview-origin.json). Verificação: `python3 tools/visual/preview.py --check --verify-ci`.
+![Visão geral do cérebro 3D](docs/media/visao-geral.png)
 
-*English summary at the end.*
+## Sumário
 
-## Em 1 minuto
+- [Início rápido](#início-rápido)
+- [Galeria](#galeria)
+- [Capacidades e limites](#capacidades-e-limites)
+- [Documentação](#documentação)
 
-Abra `prototype/cerebro-semantico-3d.html` no navegador. A página é um arquivo único e já traz o grafo do vault fictício de `examples/`. Ela baixa Three.js e GSAP do CDN jsDelivr, então precisa de internet na primeira carga.
+## Início rápido
 
-Controles: arraste para orbitar, role para aproximar, clique num neurônio para ativar, `Esc` volta, `/` busca. A linha do tempo fica no canto inferior direito.
-
-## Com o seu vault
-
-Requisito: Python 3.9 ou mais novo. O pipeline usa só a biblioteca padrão.
+Para abrir a demonstração localmente, clone o repositório e abra o arquivo HTML no navegador. O link do HTML no GitHub exibe o código-fonte, não executa a aplicação. O grafo embutido é fictício. O navegador precisa de internet para carregar Three.js e GSAP pelo jsDelivr.
 
 ```bash
-cp config/config.example.json config/config.json      # config.json fica fora do git
-# edite categories, vault.path, vault.folders e timeline.start
+git clone https://github.com/alexander-stack1/cerebro-semantico.git
+cd cerebro-semantico
+open prototype/cerebro-semantico-3d.html  # macOS; em outros sistemas, abra o arquivo no navegador
+```
+
+Controles: arraste para orbitar, use o scroll para aproximar ou afastar e clique num neurônio para selecioná-lo. `Esc` limpa a seleção e retorna à visão geral. Pressione `/` para buscar e use a linha do tempo na parte inferior direita para percorrer as semanas.
+
+Para gerar uma visualização com seu vault, use Python 3.9 ou superior. O pipeline não exige pacotes Python externos:
+
+```bash
+cp config/config.example.json config/config.json  # arquivo local ignorado pelo Git
+# Edite categories, vault.path, vault.folders e timeline.start.
 python3 pipeline/build_graph.py --config config/config.json --out out/grafo.json --source "Minhas notas"
 python3 pipeline/embed_viewer.py --template prototype/cerebro-semantico-3d.html \
     --json out/grafo.json --out out/meu-cerebro.html
 ```
 
-`build_graph.py` sai com código 1 se um nome de pessoa (título de nota do tipo `pessoa`) aparecer no grafo. Corrija com `graph.rename` antes de publicar.
+O vault usa notas `.md`, frontmatter simples em linhas `chave: valor`, wikilinks `[[Título]]` e linhas datadas `- AAAA-MM-DD`. Categorias e pastas são definidas na configuração. Veja o [formato esperado](docs/FORMATO_GRAFO.md) e o [funcionamento detalhado](docs/COMO_FUNCIONA.md).
 
-### O que o vault precisa ter
+## Galeria
 
-| Elemento | Formato | Uso no cérebro |
+As imagens mostram a visão geral, o tema selecionado e a linha do tempo. Clique nas miniaturas para abrir os vídeos correspondentes.
+
+| Visão geral | Tema ativo | Linha do tempo |
 |---|---|---|
-| Pasta | uma por área, mapeada em `vault.folders` | define a categoria e o lobo |
-| Frontmatter | `tipo`, `dominio`, `tags`, `confianca` em linhas `chave: valor` | filtra notas, gera rótulo e conexões latentes |
-| Wikilink | `[[Título]]` | sinapse direta |
-| Fato datado | linha `- AAAA-MM-DD: texto` | atividade da semana |
-| Evento | linha `- AAAA-MM-DD \| Domínio \| texto \| [[Nota]]` numa nota `Eventos ...` | atividade da nota citada e linha do tempo |
+| ![Visão geral do cérebro 3D](docs/media/visao-geral.png) | ![Tema selecionado no cérebro](docs/media/tema-ativo.png) | ![Linha do tempo do cérebro](docs/media/linha-do-tempo.png) |
 
-Notas de `tipo` pessoa, hub, período, eventos e pendências ficam fora do grafo. Veja o vault de exemplo em `examples/vault` e o formato do JSON em [docs/FORMATO_GRAFO.md](docs/FORMATO_GRAFO.md).
+| Demonstração | Demonstração da linha do tempo |
+|---|---|
+| [![Assistir à navegação no cérebro](docs/media/visao-geral.png)](docs/media/navegacao.mp4) | [![Assistir à linha do tempo](docs/media/linha-do-tempo.png)](docs/media/linha-do-tempo.mp4) |
 
-## Como o grafo é calculado
+As miniaturas são links para os arquivos de vídeo. A reprodução depende do visualizador de Markdown ou navegador.
 
-- **Peso**: grau do nó no grafo de links, normalizado entre 0,3 e 1.
-- **Proximidade**: 0,45 de base, +0,2 se o link é recíproco, até +0,35 pela vizinhança em comum (Jaccard), +0,05 na mesma pasta.
-- **Latentes**: pares sem link direto que dividem uma pessoa ou duas tags. No máximo 2 por nó. Ficam quase invisíveis e acendem quando um vizinho é ativado.
-- **Calor**: registros datados por semana com meia-vida de 3 semanas. Define tamanho e brilho do neurônio, força das sinapses e o mapa de calor dos lobos.
+As mídias são capturas reais do Chromium com renderização por software SwiftShader, sem áudio. A fluidez pode ser limitada pelo renderizador sem GPU e não representa o desempenho em GPU. A origem e os hashes estão em [docs/media/origin.json](docs/media/origin.json). Verifique a captura e o artefato de CI com `python3 tools/visual/demo_media.py --verify-ci`.
 
-## Pipeline opcional: mensagens para o vault
+## Capacidades e limites
 
-Para alimentar o vault com conversas exportadas (uma mensagem por linha em NDJSON):
+- O pipeline constrói conexões diretas a partir de wikilinks e conexões latentes a partir de temas compartilhados. O peso do nó considera seu grau no grafo.
+- O calor da atividade semanal usa meia-vida de três semanas: após esse intervalo, a contribuição de uma semana anterior cai pela metade. Conexões latentes representam relações calculadas por notas ou tags compartilhadas; não são inferências de inteligência artificial.
+- Registros datados alimentam atividade semanal; o visualizador oferece busca, seleção, foco por categoria e linha do tempo.
+- Ferramentas opcionais preparam extratos de mensagens com redação de padrões conhecidos, validam notas e montam linha do tempo mensal e CSV. O uso com dados reais exige ler [Privacidade](docs/PRIVACIDADE.md).
+- Redação não é anonimização garantida: nomes no texto, dados escritos por extenso, conteúdo de arquivos e formatos de outros países podem passar. Revise antes de compartilhar.
+- O parser não implementa YAML completo. Não aceita frontmatter multilinha. O visualizador depende do CDN e a compatibilidade documentada foi verificada em Chrome; Safari e Firefox são **NÃO VERIFICADO**.
 
-1. `prep_messages.py` redige CPF, CNPJ, processo, telefone, e-mail, URL, cartão e credenciais, troca conversas sigilosas por alias estável e grava um extrato por área.
-2. Um modelo de linguagem atualiza as notas da área a partir do extrato, seguindo `pipeline/briefing.template.md`.
-3. `lint_vault.py` falha se uma nota tiver dado sigiloso ou nome de contato sigiloso.
-4. `timeline.py` reconstrói as notas de linha do tempo e o CSV de eventos.
-5. `build_graph.py` e `embed_viewer.py` geram a página.
+## Documentação
 
-Leia [docs/PRIVACIDADE.md](docs/PRIVACIDADE.md) antes de usar com dados reais.
+- [Como funciona](docs/COMO_FUNCIONA.md)
+- [Roteiros e reprodução das demonstrações](docs/DEMONSTRACOES.md)
+- [Formato do grafo](docs/FORMATO_GRAFO.md)
+- [Privacidade e limites da redação](docs/PRIVACIDADE.md)
+- [Mapa do repositório](docs/agent/REPO_MAP.md)
+
+Captura do exemplo: [imagem](docs/img/preview.png) · [proveniência e hashes](docs/img/preview-origin.json). Verifique a origem com `python3 tools/visual/preview.py --check --verify-ci`.
+
+## English summary
+
+Cérebro Semântico turns an Obsidian-style Markdown vault into an interactive 3D brain. Topic notes become neurons placed in the lobe of their area, wikilinks become synapses, and a weekly timeline shows how “hot” each topic was. Open `prototype/cerebro-semantico-3d.html` to see the fictional example. To use your own vault, copy `config/config.example.json`, then run `pipeline/build_graph.py` and `pipeline/embed_viewer.py`. The pipeline is pure Python standard library (3.9+). An optional message pipeline redacts personal data (Brazilian formats) before any text reaches a language model. The UI and docs are in Brazilian Portuguese.
 
 ## Desenvolvimento
 
 ```bash
-python3 -m unittest discover -s tests        # 53 testes, só biblioteca padrão
-python3 scripts/check_size.py                # limite de 20.000 bytes por arquivo de texto
-python3 examples/gerar_vault_exemplo.py      # regenera o vault de exemplo
-python3 tools/visual/smoke.py --html prototype/cerebro-semantico-3d.html   # opcional, precisa de playwright
+python3 -m unittest discover -s tests
+python3 scripts/check_size.py
 ```
 
-Mapa do código: [docs/agent/REPO_MAP.md](docs/agent/REPO_MAP.md). Decisões: [docs/agent/DECISIONS.md](docs/agent/DECISIONS.md). Estado atual e próximos passos: [docs/HANDOFF.md](docs/HANDOFF.md).
-
-## English summary
-
-Cérebro Semântico turns an Obsidian-style Markdown vault into an interactive 3D brain. Topic notes become neurons placed in the lobe of their area, wikilinks become synapses, and a weekly timeline shows how "hot" each topic was. Open `prototype/cerebro-semantico-3d.html` to see the fictional example. To use your own vault, copy `config/config.example.json`, then run `pipeline/build_graph.py` and `pipeline/embed_viewer.py`. The pipeline is pure Python standard library (3.9+). An optional message pipeline redacts personal data (Brazilian formats) before any text reaches a language model. The UI and docs are in Brazilian Portuguese.
+O pipeline e os testes usam apenas a biblioteca padrão. O smoke visual é opcional e requer Playwright, Pillow e NumPy: `python3 tools/visual/smoke.py --html prototype/cerebro-semantico-3d.html`.
 
 ## Licença
 
-MIT. Ver [LICENSE](LICENSE).
+[MIT](LICENSE).

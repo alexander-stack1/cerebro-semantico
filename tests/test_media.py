@@ -55,3 +55,14 @@ class MediaOriginTest(unittest.TestCase):
     def test_metadados_de_captura_obrigatorios(self):
         with self.assertRaises(ValueError):
             demo_media.validate_metadata({})
+
+    def test_ffprobe_normaliza_campos_entre_versoes(self):
+        expected = {'streams': [{'codec_name': 'h264', 'width': 1440, 'height': 900}],
+                    'format': {'duration': '20.000000'}}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'video.mp4'
+            path.write_bytes(b'\0\0\0\x08ftyp' + b'0' * 1024)
+            with patch.object(demo_media.subprocess, 'check_output', return_value=json.dumps(
+                    dict(expected, programs=[], stream_groups=[]))), patch.object(
+                        demo_media.subprocess, 'run'):
+                self.assertEqual(demo_media.validate_video(path), expected)

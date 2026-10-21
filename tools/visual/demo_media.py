@@ -42,7 +42,7 @@ def validate_video(path):
         raise ValueError('Vídeo incompleto ou formato inesperado')
     subprocess.run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(path),
                     '-f', 'null', '-'], check=True, capture_output=True)
-    return info
+    return {'streams': info['streams'], 'format': info['format']}
 
 
 def validate_metadata(receipt):

@@ -3,7 +3,7 @@
 ```
 status: draft
 generated_at: 2026-10-21
-git_sha: 50dc071
+git_sha: 5ba3993
 generator: humano + Claude, revisão do mantenedor pendente
 ```
 
@@ -26,7 +26,7 @@ Lê um vault Markdown, calcula um grafo de temas com atividade semanal e injeta 
 | Briefing | `pipeline/briefing.template.md` | Instrução para o modelo que atualiza o vault | texto com placeholders | não |
 | Viewer | `prototype/cerebro-semantico-3d.html` | Cérebro procedural, neurônios, sinapses, fótons, UI, linha do tempo | abrir no navegador; `window.CerebroSemantico` | `tools/visual/smoke.py` |
 | Exemplo | `examples/` | Gerador do vault fictício, vault gerado, grafo de exemplo | `gerar_vault_exemplo.py` | testes de reprodução |
-| Visual | `tools/visual/` | Smoke em Chromium SwiftShader e medição de luminância | `smoke.py`, `measure.py` | manual |
+| Visual | `tools/visual/` | Smoke, medição, capturas e vídeos do exemplo com origem verificável | `smoke.py`, `measure.py`, `demo_media.py` | `test_media.py` + CI |
 | Publicação | `scripts/check_publication.py`, `tools/visual/preview.py` | Lista exata de noreply; captura do exemplo com hashes e verificação do artefato do CI | CLI | `test_publication.py`, `test_preview_origin.py` |
 | Tamanho | `scripts/check_size.py` | Limite de 20.000 bytes no CI | CLI | CI |
 
