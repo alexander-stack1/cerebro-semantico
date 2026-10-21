@@ -25,3 +25,24 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Limite de tamanho por arquivo
         run: python scripts/check_size.py
+
+  preview:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependências visuais opcionais
+        run: python -m pip install playwright==1.64.0 pillow==13.0.0 numpy==2.5.4
+      - name: Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Capturar exemplo e registrar origem
+        run: python tools/visual/preview.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-${{ github.sha }}
+          path: |
+            docs/img/preview.png
+            docs/img/preview-origin.json
+          if-no-files-found: error
